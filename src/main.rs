@@ -1,4 +1,5 @@
 mod api;
+mod pages;
 mod reader;
 mod search;
 
@@ -34,7 +35,7 @@ fn main() {
 
 fn run(terminal: &mut DefaultTerminal, query: String) -> Result<()> {
     let mut search = search::Search::new(query);
-    let mut pages = reader::Pages::spawn();
+    let mut pages = pages::Pages::spawn();
     while let Some((title, chapters)) = search.run(terminal)? {
         if reader::run(terminal, &mut pages, title, chapters)? == reader::Exit::Quit {
             break;

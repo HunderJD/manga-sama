@@ -68,7 +68,7 @@ The reader opens on the chapter list.
 | `d` `u`               | half a screen                              |
 | `h` `l`, left / right click | previous / next chapter              |
 | `F1`                  | chapter list, type a number to jump to it  |
-| `F2`                  | hide the status bar                        |
+| `Shift+H`             | hide the status bar                        |
 | `Ctrl+L`              | language                                   |
 | `?`                   | help                                       |
 | `Backspace` `Esc`     | back to the search                         |

@@ -18,7 +18,7 @@ use crate::kitty::{self, Geo, Placement};
 use crate::pages::{self, Image};
 
 /// Tile width in cells. The cover's height follows the thumbnails' 440×248 aspect.
-const TILE_COLS: u16 = 24;
+const TILE_COLS: u16 = 18;
 const GAP: u16 = 1;
 
 /// Covers to fetch (the missing ones on screen, in order) and the width to decode them at.
@@ -246,13 +246,13 @@ mod tests {
         assert_eq!(moved(4, 7, 3, KeyCode::Down), 4);
         assert_eq!(moved(4, 7, 3, KeyCode::Up), 1);
         assert_eq!(moved(6, 7, 3, KeyCode::Right), 6);
-        // 24 cells of 10×20 px: 240×135 px, about 7 rows.
+        // 18 cells of 10×20 px: 180×101 px, about 5 rows.
         let geo = Geo {
             cols: 200,
             rows: 50,
             cell_w: 10,
             cell_h: 20,
         };
-        assert_eq!(cover_rows(geo), 7);
+        assert_eq!(cover_rows(geo), 5);
     }
 }

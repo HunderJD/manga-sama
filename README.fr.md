@@ -41,7 +41,7 @@ L'app est en anglais par défaut, `Ctrl+L` pour passer en français.
 |----------|------------------|
 | flèches  | se déplacer      |
 | `Entrée` | ouvrir           |
-| `Tab`    | tuiles / liste   |
+| `Ctrl+T` | tuiles           |
 | `Ctrl+L` | langue           |
 | `?`      | aide             |
 | `Échap`  | quitter          |

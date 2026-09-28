@@ -18,7 +18,7 @@
   "api.bad_chapters": "liste des chapitres invalide : {json}",
   "pages.bad_image": "image illisible : {e}",
   "help": "Aide",
-  "search.help": "flèches  choisir\nEntrée   ouvrir\nTab      tuiles / liste\nCtrl+L   langues\n?        cette aide\nÉchap    quitter",
+  "search.help": "flèches  choisir\nEntrée   ouvrir\nCtrl+T   tuiles\nCtrl+L   langues\n?        cette aide\nÉchap    quitter",
   "language": "Français",
   "languages": "Langues"
 }

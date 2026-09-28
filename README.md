@@ -40,7 +40,7 @@ The reader opens on the chapter list.
 |----------|------------------|
 | arrows   | move             |
 | `Enter`  | open             |
-| `Tab`    | tiles / list     |
+| `Ctrl+T` | cover tiles      |
 | `Ctrl+L` | language         |
 | `?`      | help             |
 | `Esc`    | quit             |

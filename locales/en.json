@@ -18,7 +18,7 @@
   "api.bad_chapters": "invalid chapter list: {json}",
   "pages.bad_image": "unreadable image: {e}",
   "help": "Help",
-  "search.help": "arrows  select\nEnter   open\nTab     tiles / list\nCtrl+L  languages\n?       this help\nEsc     quit",
+  "search.help": "arrows  select\nEnter   open\nCtrl+T  tiles\nCtrl+L  languages\n?       this help\nEsc     quit",
   "language": "English",
   "languages": "Languages"
 }

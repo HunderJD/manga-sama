@@ -176,6 +176,7 @@ pub fn run(
     };
     // Nothing is downloaded until a chapter is chosen in the list.
     let exit = reader.event_loop(terminal);
+    reader.io.stop();
     reader.delete_images()?;
     exit
 }

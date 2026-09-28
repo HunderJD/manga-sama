@@ -1,6 +1,10 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use image::imageops::FilterType;
@@ -8,6 +12,9 @@ use image::imageops::FilterType;
 use crate::Result;
 use crate::api::{self, Chapter};
 use crate::i18n::tf;
+
+/// Pages decoded at the same time. Downloads stay one at a time.
+const DECODERS: usize = 2;
 
 /// Pages of a chapter to download and decode for the reader, `start` first.
 struct Show {
@@ -22,6 +29,16 @@ enum Job {
     Show(Show),
     /// Chapters to download ahead into the cache, without decoding.
     Prefetch(String, Vec<Chapter>),
+    /// The reader was closed: drop what is left to download.
+    Stop,
+}
+
+/// A downloaded page, waiting for a decoder.
+struct Decode {
+    job: u64,
+    page: u32,
+    width: u32,
+    bytes: Arc<Vec<u8>>,
 }
 
 pub struct Loaded {
@@ -36,8 +53,8 @@ pub struct Image {
     pub rgb: Vec<u8>,
 }
 
-/// Background worker that downloads and decodes the pages of the requested chapter,
-/// then downloads the chapters asked for ahead.
+/// Background threads: one downloads the pages of the requested chapter (then the chapters asked
+/// for ahead), `DECODERS` others decode them.
 pub struct Pages {
     jobs: Sender<Job>,
     pub done: Receiver<Loaded>,
@@ -48,7 +65,15 @@ impl Pages {
     pub fn spawn() -> Self {
         let (jobs, job_rx) = mpsc::channel();
         let (done_tx, done) = mpsc::channel();
-        thread::spawn(move || work(job_rx, done_tx));
+        let (decode_tx, decode_rx) = mpsc::channel();
+        let decode_rx = Arc::new(Mutex::new(decode_rx));
+        // Id of the chapter being shown: decoders skip pages of an older one.
+        let shown = Arc::new(AtomicU64::new(0));
+        for _ in 0..DECODERS {
+            let (tasks, done, shown) = (decode_rx.clone(), done_tx.clone(), shown.clone());
+            thread::spawn(move || decoder(&tasks, &done, &shown));
+        }
+        thread::spawn(move || work(job_rx, decode_tx, done_tx, &shown));
         Pages {
             jobs,
             done,
@@ -76,13 +101,23 @@ impl Pages {
             .jobs
             .send(Job::Prefetch(title.to_string(), chapters.to_vec()));
     }
+
+    /// Stops downloading, e.g. when leaving the reader. The cache is kept.
+    pub fn stop(&self) {
+        let _ = self.jobs.send(Job::Stop);
+    }
 }
 
 /// One request at a time, to stay polite with the site: the shown chapter first, then the prefetch.
 /// A new job replaces the queue of its kind between two pages.
-fn work(jobs: Receiver<Job>, done: Sender<Loaded>) -> Option<()> {
+fn work(
+    jobs: Receiver<Job>,
+    decode: Sender<Decode>,
+    done: Sender<Loaded>,
+    shown: &AtomicU64,
+) -> Option<()> {
     // ponytail: every page downloaded this session stays in memory; add an LRU if long sessions get heavy.
-    let mut cache: HashMap<(String, u32, u32), Vec<u8>> = HashMap::new();
+    let mut cache: HashMap<(String, u32, u32), Arc<Vec<u8>>> = HashMap::new();
     let mut show = None;
     let mut queue: Vec<u32> = Vec::new();
     let mut ahead_title = String::new();
@@ -103,6 +138,7 @@ fn work(jobs: Receiver<Job>, done: Sender<Loaded>) -> Option<()> {
                         .chain(1..new.start)
                         .rev()
                         .collect();
+                    shown.store(new.id, Relaxed);
                     show = Some(new);
                 }
                 Job::Prefetch(title, chapters) => {
@@ -113,38 +149,81 @@ fn work(jobs: Receiver<Job>, done: Sender<Loaded>) -> Option<()> {
                         .collect();
                     ahead_title = title;
                 }
+                Job::Stop => {
+                    queue.clear();
+                    ahead.clear();
+                    // Decoders skip the pages still waiting for them.
+                    shown.store(0, Relaxed);
+                }
             }
         }
 
         if let (Some(current), Some(page)) = (&show, queue.pop()) {
             let number = current.chapter.number;
             let bytes = match cache.entry((current.title.clone(), number, page)) {
-                Entry::Occupied(entry) => Ok(entry.into_mut()),
+                Entry::Occupied(entry) => Ok(entry.get().clone()),
                 Entry::Vacant(entry) => api::page(&current.title, number, page)
-                    .map(|bytes| entry.insert(bytes))
+                    .map(|bytes| entry.insert(Arc::new(bytes)).clone())
                     .map_err(|e| e.to_string()),
             };
-            let image = bytes.and_then(|bytes| decode(bytes, current.width));
             let job = current.id;
-            done.send(Loaded { job, page, image }).ok()?;
+            match bytes {
+                Ok(bytes) => {
+                    let width = current.width;
+                    decode
+                        .send(Decode {
+                            job,
+                            page,
+                            width,
+                            bytes,
+                        })
+                        .ok()?;
+                }
+                Err(e) => done
+                    .send(Loaded {
+                        job,
+                        page,
+                        image: Err(e),
+                    })
+                    .ok()?,
+            }
         } else if let Some((chapter, page)) = ahead.pop()
             && let Entry::Vacant(entry) = cache.entry((ahead_title.clone(), chapter, page))
             // A failed prefetch is simply fetched again when shown.
             && let Ok(bytes) = api::page(&ahead_title, chapter, page)
         {
-            entry.insert(bytes);
+            entry.insert(Arc::new(bytes));
         }
+    }
+}
+
+/// Decodes the downloaded pages, skipping those of a chapter that is no longer shown.
+fn decoder(
+    tasks: &Mutex<Receiver<Decode>>,
+    done: &Sender<Loaded>,
+    shown: &AtomicU64,
+) -> Option<()> {
+    loop {
+        // The lock is only held while waiting for a task, not while decoding it.
+        let task = tasks.lock().ok()?.recv().ok()?;
+        if task.job != shown.load(Relaxed) {
+            continue;
+        }
+        let image = decode(&task.bytes, task.width);
+        let (job, page) = (task.job, task.page);
+        done.send(Loaded { job, page, image }).ok()?;
     }
 }
 
 /// Decodes an image and resizes it to exactly `width` px, keeping its aspect.
 pub fn decode(bytes: &[u8], width: u32) -> Result<Image, String> {
     let image = image::load_from_memory(bytes).map_err(|e| tf("pages.bad_image", &[("e", &e)]))?;
-    // Exactly the column width, up or down: the reader shows pages 1:1.
-    let image = if image.width() == width {
-        image
-    } else {
-        image.resize(width, u32::MAX, FilterType::Triangle)
+    // Exactly the column width, up or down: the reader shows pages 1:1. `thumbnail` is a fast
+    // shrink (each source pixel counts once), several times quicker than a filtered resize.
+    let image = match image.width().cmp(&width) {
+        Ordering::Greater => image.thumbnail(width, u32::MAX),
+        Ordering::Less => image.resize(width, u32::MAX, FilterType::Triangle),
+        Ordering::Equal => image,
     };
     let rgb = image.into_rgb8();
     Ok(Image {

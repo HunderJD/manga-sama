@@ -54,14 +54,22 @@ pub struct Placement {
     pub src_h: u32,
 }
 
+/// An image stored in kitty: its id and its size in pixels.
+#[derive(Clone, Copy)]
+pub struct Stored {
+    pub id: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// Wraps graphics keys in the escape sequence kitty reads; `q=2` keeps kitty from answering.
 fn command(keys: &str) -> String {
     format!("\x1b_Gq=2,{keys}\x1b\\")
 }
 
-/// Stores `image` in kitty, without showing it, and returns its id. The pixels go through a temporary
-/// file that kitty deletes after reading (`t=t`), so megabytes never go through the terminal.
-pub fn transmit(image: &Image) -> Result<u32> {
+/// Stores `image` in kitty, without showing it. The pixels go through a temporary file that
+/// kitty deletes after reading (`t=t`), so megabytes never go through the terminal.
+pub fn transmit(image: &Image) -> Result<Stored> {
     // One counter for the whole app, so covers and pages never share an id.
     static NEXT_ID: AtomicU32 = AtomicU32::new(1);
     let id = NEXT_ID.fetch_add(1, Relaxed);
@@ -76,7 +84,7 @@ pub fn transmit(image: &Image) -> Result<u32> {
     send(&command(&format!(
         "a=t,t=t,f=24,s={width},v={height},i={id};{path}"
     )))?;
-    Ok(id)
+    Ok(Stored { id, width, height })
 }
 
 /// Shows part of a stored image. The placement id is always 1, so placing an image again
@@ -95,9 +103,13 @@ pub fn hide(id: u32) -> String {
     command(&format!("a=d,d=i,i={id}"))
 }
 
-/// Deletes image `id` from kitty's memory.
-pub fn free(id: u32) -> String {
-    command(&format!("a=d,d=I,i={id}"))
+/// Deletes these images from kitty's memory.
+pub fn free(ids: impl IntoIterator<Item = u32>) -> Result<()> {
+    let commands: String = ids
+        .into_iter()
+        .map(|id| command(&format!("a=d,d=I,i={id}")))
+        .collect();
+    send(&commands)
 }
 
 /// Moves kitty from the `shown` placements to the new ones, sending only what changed.

@@ -107,10 +107,11 @@ fn work(jobs: Receiver<Job>, done: Sender<Loaded>) {
 
 fn decode(bytes: &[u8], width: u32) -> Result<Image, String> {
     let image = image::load_from_memory(bytes).map_err(|e| format!("image illisible : {e}"))?;
-    let image = if image.width() > width {
-        image.resize(width, u32::MAX, FilterType::Triangle)
-    } else {
+    // Exactly the column width, up or down: the reader shows pages 1:1.
+    let image = if image.width() == width {
         image
+    } else {
+        image.resize(width, u32::MAX, FilterType::Triangle)
     };
     let rgb = image.into_rgb8();
     Ok(Image {

@@ -28,8 +28,16 @@ type Found = (String, Result<Vec<Link>, String>);
 
 /// What to fetch once "Chargement…" is on screen.
 enum Todo {
-    Versions(String),
+    Versions { slug: String, name: String },
     Chapters { slug: String, path: String },
+}
+
+/// The scan versions of the chosen work, when it has several.
+struct Versions {
+    slug: String,
+    name: String,
+    links: Vec<Link>,
+    list: ListState,
 }
 
 pub struct Search {
@@ -42,15 +50,14 @@ pub struct Search {
     /// Query whose results are on screen.
     shown: String,
     list: ListState,
-    /// Slug and scan versions of the chosen work, when it has several.
-    versions: Option<(String, Vec<Link>, ListState)>,
+    versions: Option<Versions>,
     todo: Option<Todo>,
     status: String,
     /// The help popup is open.
     help: bool,
     /// The language list, when open.
     languages: Option<ListState>,
-    /// Results as cover tiles; Tab switches to a plain list.
+    /// Results as cover tiles instead of a list; Ctrl+T switches.
     grid: bool,
     tiles: Tiles,
     /// Terminal size; `None` when it gives no pixel size, then there are no covers.
@@ -76,7 +83,7 @@ impl Search {
             status: String::new(),
             help: false,
             languages: None,
-            grid: true,
+            grid: false,
             tiles: Tiles::new(),
             geo: None,
             queries,
@@ -175,18 +182,23 @@ impl Search {
 
     fn fetch(&mut self, todo: Todo) -> Result<Option<(String, Vec<Chapter>)>> {
         match todo {
-            Todo::Versions(slug) => {
-                let mut versions = api::versions(&slug)?;
-                match versions.len() {
+            Todo::Versions { slug, name } => {
+                let mut links = api::versions(&slug)?;
+                match links.len() {
                     0 => self.status = t("search.no_scans").into(),
                     1 => {
-                        let path = versions.remove(0).path;
+                        let path = links.remove(0).path;
                         self.todo = Some(Todo::Chapters { slug, path });
                     }
                     _ => {
                         self.status.clear();
                         let list = ListState::default().with_selected(Some(0));
-                        self.versions = Some((slug, versions, list));
+                        self.versions = Some(Versions {
+                            slug,
+                            name,
+                            links,
+                            list,
+                        });
                     }
                 }
                 Ok(None)
@@ -234,7 +246,7 @@ impl Search {
         }
         match key.code {
             KeyCode::Esc => return true,
-            KeyCode::Tab => self.grid = !self.grid,
+            KeyCode::Char('t') if ctrl => self.grid = !self.grid,
             KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down if self.tiled() => {
                 let len = self.cache.get(&self.shown).map_or(0, Vec::len);
                 let selected = self.list.selected().unwrap_or(0);
@@ -247,7 +259,8 @@ impl Search {
             KeyCode::Enter => {
                 let results = self.cache.get(&self.shown);
                 if let Some(work) = self.list.selected().and_then(|i| results?.get(i)) {
-                    self.todo = Some(Todo::Versions(work.path.clone()));
+                    let (slug, name) = (work.path.clone(), work.name.clone());
+                    self.todo = Some(Todo::Versions { slug, name });
                     self.status = t("loading").into();
                 }
             }
@@ -271,15 +284,16 @@ impl Search {
     }
 
     fn handle_versions(&mut self, code: KeyCode) {
-        let Some((slug, versions, list)) = &mut self.versions else {
+        let Some(versions) = &mut self.versions else {
             return;
         };
         match code {
-            KeyCode::Char('j') | KeyCode::Down => list.select_next(),
-            KeyCode::Char('k') | KeyCode::Up => list.select_previous(),
+            KeyCode::Char('j') | KeyCode::Down => versions.list.select_next(),
+            KeyCode::Char('k') | KeyCode::Up => versions.list.select_previous(),
             KeyCode::Enter => {
-                if let Some(version) = list.selected().and_then(|i| versions.get(i)) {
-                    let (slug, path) = (slug.clone(), version.path.clone());
+                let chosen = versions.list.selected().and_then(|i| versions.links.get(i));
+                if let Some(version) = chosen {
+                    let (slug, path) = (versions.slug.clone(), version.path.clone());
                     self.todo = Some(Todo::Chapters { slug, path });
                     self.status = t("loading").into();
                     self.versions = None;
@@ -292,6 +306,19 @@ impl Search {
 
     /// Draws the screen and returns where kitty must draw the covers.
     fn draw(&mut self, frame: &mut Frame) -> Vec<Placement> {
+        if let Some(versions) = &mut self.versions {
+            // A screen of its own: "<work> · Version" and the choices.
+            let title = format!(" {} · {} ", versions.name, t("search.version"));
+            let list = List::new(versions.links.iter().map(|link| link.name.as_str()))
+                .block(Block::bordered().title(title))
+                .highlight_style(Modifier::REVERSED);
+            frame.render_stateful_widget(list, frame.area(), &mut versions.list);
+            if let Some(list) = &mut self.languages {
+                crate::draw_languages(frame, list);
+            }
+            return Vec::new();
+        }
+
         let [input, results, status] = Layout::vertical([
             Constraint::Length(3),
             Constraint::Fill(1),
@@ -332,10 +359,6 @@ impl Search {
         };
         frame.render_widget(Paragraph::new(hint).dim(), status);
 
-        if let Some((_, versions, list)) = &mut self.versions {
-            let items = versions.iter().map(|v| v.name.clone()).collect();
-            crate::popup(frame, t("search.version"), items, list);
-        }
         if self.help {
             let items = t("search.help").lines().map(String::from).collect();
             crate::popup(frame, t("help"), items, &mut ListState::default());
@@ -344,7 +367,7 @@ impl Search {
             crate::draw_languages(frame, list);
         }
         // Covers are drawn above the text: hide them while a popup is open.
-        let popup = self.help || self.versions.is_some() || self.languages.is_some();
+        let popup = self.help || self.languages.is_some();
         if popup { Vec::new() } else { placements }
     }
 }

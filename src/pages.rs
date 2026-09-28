@@ -7,6 +7,7 @@ use image::imageops::FilterType;
 
 use crate::Result;
 use crate::api::{self, Chapter};
+use crate::i18n::tf;
 
 /// Pages of a chapter to download and decode for the reader, `start` first.
 struct Show {
@@ -143,7 +144,7 @@ fn work(jobs: Receiver<Job>, done: Sender<Loaded>) {
 }
 
 fn decode(bytes: &[u8], width: u32) -> Result<Image, String> {
-    let image = image::load_from_memory(bytes).map_err(|e| format!("image illisible : {e}"))?;
+    let image = image::load_from_memory(bytes).map_err(|e| tf("pages.bad_image", &[("e", &e)]))?;
     // Exactly the column width, up or down: the reader shows pages 1:1.
     let image = if image.width() == width {
         image

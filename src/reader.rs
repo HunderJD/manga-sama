@@ -11,6 +11,7 @@ use ratatui::{DefaultTerminal, Frame};
 
 use crate::Result;
 use crate::api::Chapter;
+use crate::i18n::{t, tf};
 use crate::kitty::{self, Placement};
 use crate::pages::{Loaded, Pages};
 
@@ -23,17 +24,6 @@ const PREFETCH_AFTER: u32 = 3;
 const PREFETCH_CHAPTERS: usize = 4;
 /// Time constant of the scroll ease-out, like CSS `scroll-behavior: smooth`: 95 % done after 3 of them.
 const GLIDE: Duration = Duration::from_millis(80);
-
-const HELP: [&str; 8] = [
-    "j k  molette  défiler",
-    "d u           demi-écran",
-    "h l           chapitre précédent / suivant",
-    "F1            liste des chapitres",
-    "F2            masquer la barre",
-    "?             cette aide",
-    "⌫ Échap       retour",
-    "q             quitter",
-];
 
 #[derive(PartialEq)]
 pub enum Exit {
@@ -57,9 +47,7 @@ impl Geo {
             || size.width < size.columns
             || size.height < size.rows
         {
-            return Err(
-                "le terminal ne donne pas sa taille en pixels : lance manga-sama dans kitty".into(),
-            );
+            return Err(t("reader.no_pixels").into());
         }
         Ok(Geo {
             cols: size.columns,
@@ -326,12 +314,17 @@ impl Reader<'_> {
                 let items = self
                     .chapters
                     .iter()
-                    .map(|c| format!("Chapitre {}", c.number));
-                crate::popup(frame, "Chapitres", items.collect(), list);
+                    .map(|c| tf("reader.chapter", &[("n", &c.number)]));
+                crate::popup(frame, t("reader.chapters"), items.collect(), list);
             }
             Some(Overlay::Help) => {
-                let items = HELP.iter().map(|line| line.to_string()).collect();
-                crate::popup(frame, "Aide", items, &mut ListState::default());
+                let items = t("reader.help").lines().map(String::from).collect();
+                crate::popup(
+                    frame,
+                    t("reader.help_title"),
+                    items,
+                    &mut ListState::default(),
+                );
             }
         }
         // Images are drawn above the text: hide them while a popup is open.
@@ -380,8 +373,8 @@ impl Reader<'_> {
                     });
                     None
                 }
-                Page::Loading => Some("Chargement…".to_string()),
-                Page::Failed(e) => Some(format!("Erreur : {e}")),
+                Page::Loading => Some(t("loading").to_string()),
+                Page::Failed(e) => Some(tf("error", &[("e", e)])),
             };
             if let Some(text) = text {
                 let rows = (y + height).div_ceil(geo.cell_h) as u16 - row;
@@ -393,11 +386,8 @@ impl Reader<'_> {
         let end_row = y.div_ceil(geo.cell_h) as u16;
         if end_row < main.height {
             let end = match self.chapters.get(self.chapter + 1) {
-                Some(_) => format!(
-                    "Fin du chapitre {} · l : chapitre suivant",
-                    self.chapters[self.chapter].number
-                ),
-                None => "Dernier chapitre.".to_string(),
+                Some(_) => tf("reader.end", &[("n", &self.chapters[self.chapter].number)]),
+                None => t("reader.last").to_string(),
             };
             let line = Rect::new(main.x, main.y + end_row, main.width, 1);
             frame.render_widget(Paragraph::new(end).centered().dim(), line);
@@ -407,13 +397,15 @@ impl Reader<'_> {
 
     fn draw_bar(&self, frame: &mut Frame, area: Rect) {
         let chapter = self.chapters[self.chapter];
-        let status = format!(
-            "{} · Chapitre {}/{} · Page {}/{} · ? aide",
-            self.title.trim(),
-            chapter.number,
-            self.chapters.len(),
-            self.pos.page + 1,
-            chapter.pages,
+        let status = tf(
+            "reader.status",
+            &[
+                ("title", &self.title.trim()),
+                ("chapter", &chapter.number),
+                ("chapters", &self.chapters.len()),
+                ("page", &(self.pos.page + 1)),
+                ("pages", &chapter.pages),
+            ],
         );
         frame.render_widget(Paragraph::new(status).reversed(), area);
     }

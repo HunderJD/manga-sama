@@ -69,7 +69,7 @@ L'app est en anglais par défaut, `Ctrl+L` pour passer en français.
 | `d` `u`               | demi-écran                                      |
 | `h` `l`, clic gauche / droit | chapitre précédent / suivant             |
 | `F1`                  | liste des chapitres, tape un numéro pour y aller |
-| `F2`                  | masquer la barre                                |
+| `Shift+H`             | masquer la barre                                |
 | `Ctrl+L`              | langue                                          |
 | `?`                   | aide                                            |
 | `Backspace` `Échap`   | retour à la recherche                           |

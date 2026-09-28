@@ -420,7 +420,7 @@ impl Reader<'_> {
             KeyCode::Char('q') => return Ok(Some(Exit::Quit)),
             // Back to the search from anywhere, unless it erases a typed chapter number.
             KeyCode::Backspace if !self.typing() => return Ok(Some(Exit::Back)),
-            KeyCode::F(2) => self.bar = !self.bar,
+            KeyCode::Char('H') => self.bar = !self.bar,
             _ if self.overlay.is_some() => self.handle_overlay(code)?,
             KeyCode::Esc => return Ok(Some(Exit::Back)),
             KeyCode::F(1) => self.overlay = Some(chapter_list(self.chapter)),

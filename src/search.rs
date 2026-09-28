@@ -216,7 +216,7 @@ impl Search {
                     self.versions = None;
                 }
             }
-            KeyCode::Esc => self.versions = None,
+            KeyCode::Esc | KeyCode::Backspace => self.versions = None,
             _ => {}
         }
     }

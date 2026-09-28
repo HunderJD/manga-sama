@@ -31,7 +31,7 @@ Le lecteur s'ouvre sur la liste des chapitres. Échap revient en arrière.
 | `h` `l`         | chapitre précédent / suivant        |
 | `F1`            | liste des chapitres                 |
 | `F2`            | masquer la barre                    |
-| `Échap`         | retour à la recherche               |
+| `⌫` `Échap`     | retour à la recherche               |
 | `q`             | quitter                             |
 
 ## Logs

@@ -7,6 +7,7 @@ use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use scraper::{Html, Selector};
 
 use crate::Result;
+use crate::i18n::tf;
 
 const BASE: &str = "https://anime-sama.to";
 
@@ -72,7 +73,7 @@ pub fn versions(slug: &str) -> Result<Vec<Link>> {
 pub fn title(slug: &str, path: &str) -> Result<String> {
     let url = format!("{BASE}/catalogue/{slug}/{path}/");
     parse_title(&get(&url)?.read_to_string()?)
-        .ok_or_else(|| format!("titre introuvable sur {url}").into())
+        .ok_or_else(|| tf("api.no_title", &[("url", &url)]).into())
 }
 
 pub fn chapters(title: &str) -> Result<Vec<Chapter>> {
@@ -142,7 +143,7 @@ fn parse_chapters(json: &str) -> Result<Vec<Chapter>> {
         .map(|(number, pages)| Chapter { number, pages })
         .collect();
     if chapters.is_empty() {
-        return Err(format!("liste des chapitres invalide : {json}").into());
+        return Err(tf("api.bad_chapters", &[("json", &json)]).into());
     }
     Ok(chapters)
 }

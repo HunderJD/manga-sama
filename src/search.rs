@@ -11,6 +11,7 @@ use ratatui::{DefaultTerminal, Frame};
 
 use crate::Result;
 use crate::api::{self, Chapter, Link};
+use crate::i18n::{t, tf};
 
 /// Time without typing before searching.
 const DEBOUNCE: Duration = Duration::from_millis(350);
@@ -80,7 +81,7 @@ impl Search {
                 match self.fetch(todo) {
                     Ok(Some(work)) => return Ok(Some(work)),
                     Ok(None) => {}
-                    Err(e) => self.status = format!("Erreur : {e}"),
+                    Err(e) => self.status = tf("error", &[("e", &e)]),
                 }
                 continue;
             }
@@ -103,7 +104,7 @@ impl Search {
                     self.show(query);
                 }
             }
-            Err(e) if current => self.status = format!("Erreur : {e}"),
+            Err(e) if current => self.status = tf("error", &[("e", &e)]),
             Err(_) => {}
         }
     }
@@ -141,7 +142,7 @@ impl Search {
             Todo::Versions(slug) => {
                 let mut versions = api::versions(&slug)?;
                 match versions.len() {
-                    0 => self.status = "Aucun scan pour ce titre.".into(),
+                    0 => self.status = t("search.no_scans").into(),
                     1 => {
                         let path = versions.remove(0).path;
                         self.todo = Some(Todo::Chapters { slug, path });
@@ -185,7 +186,7 @@ impl Search {
                 let results = self.cache.get(&self.shown);
                 if let Some(work) = self.list.selected().and_then(|i| results?.get(i)) {
                     self.todo = Some(Todo::Versions(work.path.clone()));
-                    self.status = "Chargement…".into();
+                    self.status = t("loading").into();
                 }
             }
             KeyCode::Backspace => {
@@ -212,7 +213,7 @@ impl Search {
                 if let Some(version) = list.selected().and_then(|i| versions.get(i)) {
                     let (slug, path) = (slug.clone(), version.path.clone());
                     self.todo = Some(Todo::Chapters { slug, path });
-                    self.status = "Chargement…".into();
+                    self.status = t("loading").into();
                     self.versions = None;
                 }
             }
@@ -229,14 +230,15 @@ impl Search {
         ])
         .areas(frame.area());
 
-        let block = Block::bordered().title(" Recherche ");
+        let block = Block::bordered().title(format!(" {} ", t("search.title")));
         frame.render_widget(Paragraph::new(self.query.as_str()).block(block), input);
         let cursor = input.x + 1 + self.query.chars().count() as u16;
         frame.set_cursor_position(Position::new(cursor, input.y + 1));
 
         match self.cache.get(&self.shown) {
             Some(links) if links.is_empty() => {
-                frame.render_widget(Paragraph::new(" Aucun résultat.").dim(), results)
+                let text = format!(" {}", t("search.no_results"));
+                frame.render_widget(Paragraph::new(text).dim(), results)
             }
             Some(links) => {
                 let list = List::new(links.iter().map(|link| link.name.as_str()))
@@ -250,15 +252,15 @@ impl Search {
         let hint = if !self.status.is_empty() {
             self.status.as_str()
         } else if query.chars().count() >= MIN_CHARS && !self.cache.contains_key(query) {
-            "Recherche…"
+            t("search.searching")
         } else {
-            "↑↓ choisir · Entrée ouvrir · Échap quitter"
+            t("search.hint")
         };
         frame.render_widget(Paragraph::new(hint).dim(), status);
 
         if let Some((_, versions, list)) = &mut self.versions {
             let items = versions.iter().map(|v| v.name.clone()).collect();
-            crate::popup(frame, "Version", items, list);
+            crate::popup(frame, t("search.version"), items, list);
         }
     }
 }

@@ -1,4 +1,5 @@
 mod api;
+mod i18n;
 mod kitty;
 mod pages;
 mod reader;
@@ -28,7 +29,7 @@ fn main() {
     let _ = execute!(stdout(), DisableMouseCapture);
     ratatui::restore();
     if let Err(e) = result {
-        eprintln!("Erreur : {e}");
+        eprintln!("{}", i18n::tf("error", &[("e", &e)]));
         std::process::exit(1);
     }
 }

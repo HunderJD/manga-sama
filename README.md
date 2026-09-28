@@ -56,7 +56,7 @@ The reader opens on the chapter list.
 | `F2`                  | hide the status bar                        |
 | `Ctrl+L`              | language                                   |
 | `?`                   | help                                       |
-| `⌫` `Esc`             | back to the search                         |
+| `Backspace` `Esc`     | back to the search                         |
 | `q`                   | quit                                       |
 
 ## Logs
@@ -74,9 +74,8 @@ Issues and pull requests are welcome.
 
 ### About AI
 
-Writing code with AI is fine, I do it too. But you should be able to explain every line you send.
-Understand what you're doing, try to follow principles like SOLID, and keep it simple.
-Please don't just vibe-code something nobody can maintain.
+Writing code with AI is fine, I do it too, but you should be able to explain every line you send.
+Read the [AI policy](AI-POLICY.md) before opening a pull request.
 
 ## License
 

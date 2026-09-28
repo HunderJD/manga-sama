@@ -1,7 +1,15 @@
 mod api;
 mod reader;
 
+use std::io::stdout;
+
 use inquire::{InquireError, Select, Text};
+use ratatui::Frame;
+use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+use ratatui::crossterm::execute;
+use ratatui::layout::Constraint;
+use ratatui::style::Modifier;
+use ratatui::widgets::{Block, Clear, List, ListState};
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
@@ -50,6 +58,35 @@ fn run() -> Result<()> {
 
         let title = api::title(&work.path, &version.path)?;
         let chapters = api::chapters(&title)?;
-        return reader::run(title, chapters);
+        return tui(title, chapters);
     }
+}
+
+fn tui(title: String, chapters: Vec<api::Chapter>) -> Result<()> {
+    let mut terminal = ratatui::init();
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = execute!(stdout(), DisableMouseCapture);
+        hook(info);
+    }));
+    let result = execute!(stdout(), EnableMouseCapture)
+        .map_err(Into::into)
+        .and_then(|()| reader::run(&mut terminal, &mut reader::Pages::spawn(), title, chapters));
+    let _ = execute!(stdout(), DisableMouseCapture);
+    ratatui::restore();
+    result.map(|_| ())
+}
+
+/// A bordered list in the middle of the screen: versions, chapters, help.
+fn popup(frame: &mut Frame, title: &str, items: Vec<String>, state: &mut ListState) {
+    let width = items.iter().map(|i| i.chars().count()).max().unwrap_or(0) as u16 + 4;
+    let height = (items.len() as u16 + 2).min(frame.area().height * 4 / 5);
+    let area = frame
+        .area()
+        .centered(Constraint::Length(width), Constraint::Length(height));
+    let list = List::new(items)
+        .block(Block::bordered().title(format!(" {title} ")))
+        .highlight_style(Modifier::REVERSED);
+    frame.render_widget(Clear, area);
+    frame.render_stateful_widget(list, area, state);
 }

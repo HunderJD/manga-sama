@@ -18,6 +18,7 @@ manga-sama
 ```
 
 Tape au moins 2 caractères (la recherche part après 350 ms sans frappe), `↑` `↓` pour choisir, Entrée pour ouvrir.
+`?` affiche l'aide, `Ctrl+L` change la langue (anglais / français), partout dans l'app.
 Le lecteur s'ouvre sur la liste des chapitres. Échap revient en arrière.
 
 ## Touches du lecteur

@@ -13,8 +13,7 @@ use crate::i18n::tf;
 struct Show {
     id: u64,
     title: String,
-    chapter: u32,
-    pages: u32,
+    chapter: Chapter,
     start: u32,
     width: u32,
 }
@@ -64,8 +63,7 @@ impl Pages {
         let _ = self.jobs.send(Job::Show(Show {
             id: self.last_job,
             title: title.to_string(),
-            chapter: chapter.number,
-            pages: chapter.pages,
+            chapter,
             start,
             width,
         }));
@@ -82,7 +80,7 @@ impl Pages {
 
 /// One request at a time, to stay polite with the site: the shown chapter first, then the prefetch.
 /// A new job replaces the queue of its kind between two pages.
-fn work(jobs: Receiver<Job>, done: Sender<Loaded>) {
+fn work(jobs: Receiver<Job>, done: Sender<Loaded>) -> Option<()> {
     // ponytail: every page downloaded this session stays in memory; add an LRU if long sessions get heavy.
     let mut cache: HashMap<(String, u32, u32), Vec<u8>> = HashMap::new();
     let mut show = None;
@@ -90,11 +88,9 @@ fn work(jobs: Receiver<Job>, done: Sender<Loaded>) {
     let mut ahead_title = String::new();
     let mut ahead: Vec<(u32, u32)> = Vec::new();
     loop {
+        // Idle: wait for a job. Busy: only take the jobs already sent, between two pages.
         let first = if queue.is_empty() && ahead.is_empty() {
-            match jobs.recv() {
-                Ok(job) => Some(job),
-                Err(_) => return,
-            }
+            Some(jobs.recv().ok()?)
         } else {
             None
         };
@@ -103,7 +99,10 @@ fn work(jobs: Receiver<Job>, done: Sender<Loaded>) {
             match job {
                 Job::Show(new) => {
                     // `start` first, the rest of the chapter, then the pages before it.
-                    queue = (new.start..=new.pages).chain(1..new.start).rev().collect();
+                    queue = (new.start..=new.chapter.pages)
+                        .chain(1..new.start)
+                        .rev()
+                        .collect();
                     show = Some(new);
                 }
                 Job::Prefetch(title, chapters) => {
@@ -118,21 +117,16 @@ fn work(jobs: Receiver<Job>, done: Sender<Loaded>) {
         }
 
         if let (Some(current), Some(page)) = (&show, queue.pop()) {
-            let bytes = match cache.entry((current.title.clone(), current.chapter, page)) {
+            let number = current.chapter.number;
+            let bytes = match cache.entry((current.title.clone(), number, page)) {
                 Entry::Occupied(entry) => Ok(entry.into_mut()),
-                Entry::Vacant(entry) => api::page(&current.title, current.chapter, page)
+                Entry::Vacant(entry) => api::page(&current.title, number, page)
                     .map(|bytes| entry.insert(bytes))
                     .map_err(|e| e.to_string()),
             };
             let image = bytes.and_then(|bytes| decode(bytes, current.width));
-            let loaded = Loaded {
-                job: current.id,
-                page,
-                image,
-            };
-            if done.send(loaded).is_err() {
-                return;
-            }
+            let job = current.id;
+            done.send(Loaded { job, page, image }).ok()?;
         } else if let Some((chapter, page)) = ahead.pop()
             && let Entry::Vacant(entry) = cache.entry((ahead_title.clone(), chapter, page))
             // A failed prefetch is simply fetched again when shown.

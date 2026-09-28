@@ -21,7 +21,10 @@ const DEBOUNCE: Duration = Duration::from_millis(350);
 const MIN_CHARS: usize = 2;
 
 /// A query and its results, from the search thread.
-type Found = (String, Result<Vec<Link>, String>);
+struct Found {
+    query: String,
+    result: Result<Vec<Link>, String>,
+}
 
 /// What to fetch once "Chargement…" is on screen.
 enum Todo {
@@ -96,9 +99,8 @@ impl Search {
         // What kitty shows now.
         let mut shown = Vec::new();
         loop {
-            let found: Vec<Found> = self.found.try_iter().collect();
-            for (query, result) in found {
-                self.receive(query, result);
+            while let Ok(found) = self.found.try_recv() {
+                self.receive(found);
             }
             self.ask();
             self.tiles.receive()?;
@@ -132,13 +134,13 @@ impl Search {
         }
     }
 
-    fn receive(&mut self, query: String, result: Result<Vec<Link>, String>) {
-        let current = query == self.query.trim();
-        match result {
+    fn receive(&mut self, found: Found) {
+        let current = found.query == self.query.trim();
+        match found.result {
             Ok(links) => {
-                self.cache.insert(query.clone(), links);
+                self.cache.insert(found.query.clone(), links);
                 if current {
-                    self.show(query);
+                    self.show(found.query);
                 }
             }
             Err(e) if current => self.status = tf("error", &[("e", &e)]),
@@ -241,7 +243,9 @@ impl Search {
         match key.code {
             KeyCode::Esc => return true,
             KeyCode::Char('t') if ctrl => self.grid = !self.grid,
-            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down if self.tiled() => {
+            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
+                if self.grid && self.geo.is_some() =>
+            {
                 let len = self.cache.get(&self.shown).map_or(0, Vec::len);
                 let selected = self.list.selected().unwrap_or(0);
                 let columns = self.tiles.columns;
@@ -270,11 +274,6 @@ impl Search {
             _ => {}
         }
         false
-    }
-
-    /// Results are shown as tiles: the grid is on and kitty gives its size in pixels.
-    fn tiled(&self) -> bool {
-        self.grid && self.geo.is_some()
     }
 
     fn handle_versions(&mut self, code: KeyCode) {
@@ -367,12 +366,11 @@ impl Search {
 }
 
 /// One search at a time; queries already outdated when it is free are skipped.
-fn search(queries: Receiver<String>, found: Sender<Found>) {
-    while let Ok(query) = queries.recv() {
+fn search(queries: Receiver<String>, found: Sender<Found>) -> Option<()> {
+    loop {
+        let query = queries.recv().ok()?;
         let query = queries.try_iter().last().unwrap_or(query);
         let result = api::search(&query).map_err(|e| e.to_string());
-        if found.send((query, result)).is_err() {
-            return;
-        }
+        found.send(Found { query, result }).ok()?;
     }
 }

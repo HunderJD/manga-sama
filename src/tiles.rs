@@ -59,8 +59,7 @@ impl Tiles {
 
     /// Sends the covers that arrived to kitty.
     pub fn receive(&mut self) -> Result<()> {
-        let covers: Vec<Cover> = self.done.try_iter().collect();
-        for (url, width, image) in covers {
+        while let Ok((url, width, image)) = self.done.try_recv() {
             // Decoded for an older size, or twice: skip it.
             if width != self.width || self.thumbs.contains_key(&url) {
                 continue;
@@ -177,17 +176,15 @@ pub fn moved(selected: usize, len: usize, columns: usize, key: KeyCode) -> usize
 }
 
 /// Downloads and decodes covers, one request at a time. A new job replaces the queue.
-fn fetch(jobs: Receiver<Job>, done: Sender<Cover>) {
+fn fetch(jobs: Receiver<Job>, done: Sender<Cover>) -> Option<()> {
     // ponytail: every cover downloaded this session stays in memory (a few dozen KB each).
     let mut cache: HashMap<String, Vec<u8>> = HashMap::new();
     let mut queue: Vec<String> = Vec::new();
     let mut width = 0;
     loop {
+        // Idle: wait for a job. Busy: only take the newest job already sent.
         let job = if queue.is_empty() {
-            match jobs.recv() {
-                Ok(job) => Some(job),
-                Err(_) => return,
-            }
+            Some(jobs.recv().ok()?)
         } else {
             jobs.try_iter().last()
         };
@@ -206,9 +203,7 @@ fn fetch(jobs: Receiver<Job>, done: Sender<Cover>) {
                 .map_err(|e| e.to_string()),
         };
         let image = bytes.and_then(|bytes| pages::decode(bytes, width));
-        if done.send((url, width, image)).is_err() {
-            return;
-        }
+        done.send((url, width, image)).ok()?;
     }
 }
 

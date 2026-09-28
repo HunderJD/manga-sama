@@ -153,6 +153,8 @@ fn parse_title(html: &str) -> Option<String> {
 
 /// Empty chapters are dropped: the reader could never show them.
 fn parse_chapters(json: &str) -> Result<Vec<Chapter>> {
+    // An unknown work gets `{"error": "..."}` instead of a chapter map: it parses as empty
+    // and ends in the error below, with the site's answer in it.
     let chapters: Vec<_> = serde_json::from_str::<BTreeMap<u32, u32>>(json)
         .unwrap_or_default()
         .into_iter()

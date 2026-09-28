@@ -49,6 +49,8 @@ struct Pos {
 }
 
 /// Moves the view by `delta` px, never above the first page nor below the end line (`end` px high).
+/// Works on the offset from the top of the chapter: `pos` → offset, add `delta` and clamp,
+/// then walk the pages to turn the offset back into a page and a pixel inside it.
 fn scroll(heights: &[u32], view: u32, end: u32, pos: Pos, delta: i64) -> Pos {
     let above: u32 = heights[..pos.page.min(heights.len())].iter().sum();
     let max = (heights.iter().sum::<u32>() + end).saturating_sub(view);
@@ -88,6 +90,7 @@ fn next_chapters(chapters: &[Chapter], current: usize) -> &[Chapter] {
 fn ease(pending: i64, dt: Duration) -> i64 {
     let share = 1.0 - (-dt.as_secs_f64() / GLIDE.as_secs_f64()).exp();
     match (pending as f64 * share).round() as i64 {
+        // Rounds to 0 when little is left: move 1 px instead, so the glide always ends.
         0 => pending.signum(),
         step => step,
     }
@@ -137,7 +140,6 @@ struct Reader<'a> {
     pending: i64,
     /// Scroll actions in this chapter, to start the prefetch.
     scrolls: u32,
-    /// When the previous frame was drawn.
     frame_at: Instant,
     geo: Geo,
     /// Pixel heights of each page and of the view, from the last frame.
@@ -197,7 +199,6 @@ impl Reader<'_> {
         Ok(())
     }
 
-    /// Frees the chapter's images from kitty's memory.
     fn delete_images(&mut self) -> Result<()> {
         kitty::free(self.pages.iter().filter_map(|page| match page {
             Page::Ready(image) => Some(image.id),
@@ -258,7 +259,7 @@ impl Reader<'_> {
             return;
         }
         let step = ease(self.pending, dt);
-        let pos = scroll(&self.heights, self.view, self.geo.cell_h, self.pos, step);
+        let pos = self.scrolled(step);
         if pos == self.pos {
             // Top or bottom reached.
             self.pending = 0;
@@ -310,10 +311,19 @@ impl Reader<'_> {
             })
             .collect();
         self.view = u32::from(main.height) * self.geo.cell_h;
-        self.pos = scroll(&self.heights, self.view, self.geo.cell_h, self.pos, 0);
+        // Moves nothing: only brings `pos` back inside the chapter when heights changed
+        // (a page loaded, a resize).
+        self.pos = self.scrolled(0);
     }
 
-    /// Draws "Chargement…", errors and the end line; returns where the page images go.
+    /// The position `delta` px away, kept inside the chapter. Below the last page comes the
+    /// "end of chapter" line, one cell high: that's the `end` given to `scroll`.
+    fn scrolled(&self, delta: i64) -> Pos {
+        let end_line = self.geo.cell_h;
+        scroll(&self.heights, self.view, end_line, self.pos, delta)
+    }
+
+    /// Draws the loading and error messages and the end line; returns where the page images go.
     fn draw_pages(&self, frame: &mut Frame, main: Rect) -> Vec<Placement> {
         if self.pages.is_empty() {
             // No chapter chosen yet.

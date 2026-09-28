@@ -44,13 +44,16 @@ impl Geo {
     }
 }
 
-/// Part of an image shown 1:1: source rectangle in pixels, drawn from cell (`x`, `y`) + `offset` px down.
+/// Part of a stored image shown 1:1 (see `place`).
 #[derive(PartialEq)]
 pub struct Placement {
     pub id: u32,
+    /// Cell where the image starts.
     pub x: u16,
     pub y: u16,
+    /// Pixels below the top of cell `y` where it really starts: pages scroll by the pixel, cells don't.
     pub offset: u32,
+    /// Source rectangle in the image, in pixels: `src_w` × `src_h` from row `src_y`.
     pub src_y: u32,
     pub src_w: u32,
     pub src_h: u32,

@@ -1,9 +1,12 @@
 use std::collections::HashMap;
+use std::io::stdout;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::execute;
+use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use ratatui::layout::{Constraint, Layout, Position};
 use ratatui::style::{Modifier, Stylize};
 use ratatui::widgets::{Block, List, ListState, Paragraph};
@@ -12,6 +15,8 @@ use ratatui::{DefaultTerminal, Frame};
 use crate::Result;
 use crate::api::{self, Chapter, Link};
 use crate::i18n::{t, tf};
+use crate::kitty::{Geo, Placement};
+use crate::tiles::{self, Tiles};
 
 /// Time without typing before searching.
 const DEBOUNCE: Duration = Duration::from_millis(350);
@@ -45,6 +50,11 @@ pub struct Search {
     help: bool,
     /// The language list, when open.
     languages: Option<ListState>,
+    /// Results as cover tiles; Tab switches to a plain list.
+    grid: bool,
+    tiles: Tiles,
+    /// Terminal size; `None` when it gives no pixel size, then there are no covers.
+    geo: Option<Geo>,
     queries: Sender<String>,
     found: Receiver<Found>,
 }
@@ -66,6 +76,9 @@ impl Search {
             status: String::new(),
             help: false,
             languages: None,
+            grid: true,
+            tiles: Tiles::new(),
+            geo: None,
             queries,
             found,
         }
@@ -82,10 +95,26 @@ impl Search {
                 self.receive(query, result);
             }
             self.ask();
-            terminal.draw(|frame| self.draw(frame))?;
+            self.tiles.receive()?;
+            let geo = Geo::now().ok();
+            if geo != self.geo {
+                // A resize clears kitty's images.
+                self.geo = geo;
+                self.tiles.reset()?;
+            }
+            let mut placements = Vec::new();
+            // Kitty shows the text and the covers of a frame together.
+            execute!(stdout(), BeginSynchronizedUpdate)?;
+            terminal.draw(|frame| placements = self.draw(frame))?;
+            self.tiles.place(placements)?;
+            execute!(stdout(), EndSynchronizedUpdate)?;
             if let Some(todo) = self.todo.take() {
                 match self.fetch(todo) {
-                    Ok(Some(work)) => return Ok(Some(work)),
+                    Ok(Some(work)) => {
+                        // The reader draws its own images: take the covers off kitty.
+                        self.tiles.reset()?;
+                        return Ok(Some(work));
+                    }
                     Ok(None) => {}
                     Err(e) => self.status = tf("error", &[("e", &e)]),
                 }
@@ -94,6 +123,7 @@ impl Search {
             let mut timeout = Duration::from_millis(50);
             while event::poll(timeout)? {
                 if self.handle(event::read()?) {
+                    self.tiles.reset()?;
                     return Ok(None);
                 }
                 timeout = Duration::ZERO;
@@ -204,6 +234,14 @@ impl Search {
         }
         match key.code {
             KeyCode::Esc => return true,
+            KeyCode::Tab => self.grid = !self.grid,
+            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down if self.tiled() => {
+                let len = self.cache.get(&self.shown).map_or(0, Vec::len);
+                let selected = self.list.selected().unwrap_or(0);
+                let columns = self.tiles.columns;
+                self.list
+                    .select(Some(tiles::moved(selected, len, columns, key.code)));
+            }
             KeyCode::Down => self.list.select_next(),
             KeyCode::Up => self.list.select_previous(),
             KeyCode::Enter => {
@@ -227,6 +265,11 @@ impl Search {
         false
     }
 
+    /// Results are shown as tiles: the grid is on and kitty gives its size in pixels.
+    fn tiled(&self) -> bool {
+        self.grid && self.geo.is_some()
+    }
+
     fn handle_versions(&mut self, code: KeyCode) {
         let Some((slug, versions, list)) = &mut self.versions else {
             return;
@@ -247,7 +290,8 @@ impl Search {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    /// Draws the screen and returns where kitty must draw the covers.
+    fn draw(&mut self, frame: &mut Frame) -> Vec<Placement> {
         let [input, results, status] = Layout::vertical([
             Constraint::Length(3),
             Constraint::Fill(1),
@@ -260,17 +304,22 @@ impl Search {
         let cursor = input.x + 1 + self.query.chars().count() as u16;
         frame.set_cursor_position(Position::new(cursor, input.y + 1));
 
-        match self.cache.get(&self.shown) {
-            Some(links) if links.is_empty() => {
+        let mut placements = Vec::new();
+        match (self.cache.get(&self.shown), self.geo.filter(|_| self.grid)) {
+            (Some(links), _) if links.is_empty() => {
                 let text = format!(" {}", t("search.no_results"));
                 frame.render_widget(Paragraph::new(text).dim(), results)
             }
-            Some(links) => {
+            (Some(links), Some(geo)) => {
+                let selected = self.list.selected().unwrap_or(0).min(links.len() - 1);
+                placements = self.tiles.draw(frame, results, links, selected, geo);
+            }
+            (Some(links), None) => {
                 let list = List::new(links.iter().map(|link| link.name.as_str()))
                     .highlight_style(Modifier::REVERSED);
                 frame.render_stateful_widget(list, results, &mut self.list);
             }
-            None => {}
+            (None, _) => {}
         }
 
         let query = self.query.trim();
@@ -294,6 +343,9 @@ impl Search {
         if let Some(list) = &mut self.languages {
             crate::draw_languages(frame, list);
         }
+        // Covers are drawn above the text: hide them while a popup is open.
+        let popup = self.help || self.versions.is_some() || self.languages.is_some();
+        if popup { Vec::new() } else { placements }
     }
 }
 

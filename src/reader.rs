@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use ratatui::crossterm::execute;
-use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate, window_size};
+use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Stylize;
 use ratatui::widgets::{ListState, Paragraph, Wrap};
@@ -12,7 +12,7 @@ use ratatui::{DefaultTerminal, Frame};
 use crate::Result;
 use crate::api::Chapter;
 use crate::i18n::{t, tf};
-use crate::kitty::{self, Placement};
+use crate::kitty::{self, Geo, Placement};
 use crate::pages::{Loaded, Pages};
 
 /// Pages are at most this wide, like on the site.
@@ -31,32 +31,8 @@ pub enum Exit {
     Back,
 }
 
-#[derive(Clone, Copy, PartialEq)]
-struct Geo {
-    cols: u16,
-    rows: u16,
-    cell_w: u32,
-    cell_h: u32,
-}
-
+/// Reader sizes.
 impl Geo {
-    fn now() -> Result<Self> {
-        let size = window_size()?;
-        if size.columns == 0
-            || size.rows == 0
-            || size.width < size.columns
-            || size.height < size.rows
-        {
-            return Err(t("reader.no_pixels").into());
-        }
-        Ok(Geo {
-            cols: size.columns,
-            rows: size.rows,
-            cell_w: u32::from(size.width / size.columns),
-            cell_h: u32::from(size.height / size.rows),
-        })
-    }
-
     /// Width of the page column, in cells.
     fn page_cols(self) -> u16 {
         self.cols.min((MAX_WIDTH_PX / self.cell_w).max(1) as u16)
@@ -172,7 +148,6 @@ struct Reader<'a> {
     view: u32,
     bar: bool,
     overlay: Option<Overlay>,
-    last_id: u32,
     /// What kitty shows now.
     shown: Vec<Placement>,
 }
@@ -199,7 +174,6 @@ pub fn run(
         view: 0,
         bar: true,
         overlay: Some(chapter_list(0)),
-        last_id: 0,
         shown: Vec::new(),
     };
     // Nothing is downloaded until a chapter is chosen in the list.
@@ -251,15 +225,11 @@ impl Reader<'_> {
             return Ok(());
         };
         *slot = match loaded.image {
-            Ok(image) => {
-                self.last_id += 1;
-                kitty::transmit(self.last_id, &image)?;
-                Page::Ready {
-                    id: self.last_id,
-                    width: image.width,
-                    height: image.height,
-                }
-            }
+            Ok(image) => Page::Ready {
+                id: kitty::transmit(&image)?,
+                width: image.width,
+                height: image.height,
+            },
             Err(e) => Page::Failed(e),
         };
         Ok(())
@@ -289,7 +259,7 @@ impl Reader<'_> {
             // Kitty shows the text and the images of a frame together.
             execute!(stdout(), BeginSynchronizedUpdate)?;
             terminal.draw(|frame| placements = self.draw(frame))?;
-            self.place(placements)?;
+            kitty::update(&mut self.shown, placements)?;
             execute!(stdout(), EndSynchronizedUpdate)?;
             // ~120 fps while scrolling. Drain the whole burst (mouse wheel) before drawing again.
             let mut timeout = Duration::from_millis(if self.pending == 0 { 50 } else { 8 });
@@ -424,26 +394,6 @@ impl Reader<'_> {
             ],
         );
         frame.render_widget(Paragraph::new(status).reversed(), area);
-    }
-
-    /// Sends kitty only what changed since the last frame, in one write.
-    fn place(&mut self, placements: Vec<Placement>) -> Result<()> {
-        if placements == self.shown {
-            return Ok(());
-        }
-        let gone = self
-            .shown
-            .iter()
-            .filter(|old| !placements.iter().any(|p| p.id == old.id))
-            .map(|old| kitty::hide(old.id));
-        let moved = placements
-            .iter()
-            .filter(|p| !self.shown.contains(p))
-            .map(kitty::place);
-        let commands: String = gone.chain(moved).collect();
-        kitty::send(&commands)?;
-        self.shown = placements;
-        Ok(())
     }
 
     fn handle(&mut self, event: Event) -> Result<Option<Exit>> {

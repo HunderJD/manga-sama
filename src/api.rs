@@ -94,12 +94,22 @@ pub fn chapters(title: &str) -> Result<Vec<Chapter>> {
 
 /// A search result's thumbnail. They live on jsdelivr (Anime-Sama's image repository), not on the site.
 pub fn cover(url: &str) -> Result<Vec<u8>> {
-    Ok(get(url)?.read_to_vec()?)
+    bytes(url)
 }
 
 pub fn page(title: &str, chapter: u32, page: u32) -> Result<Vec<u8>> {
     let url = format!("{BASE}/s2/scans/{}/{chapter}/{page}.jpg", encode(title));
-    Ok(get(&url)?.read_to_vec()?)
+    bytes(&url)
+}
+
+/// Some pages weigh more than the 10 MB ureq accepts by default.
+const MAX_IMAGE: u64 = 100 * 1024 * 1024;
+
+fn bytes(url: &str) -> Result<Vec<u8>> {
+    Ok(get(url)?
+        .into_with_config()
+        .limit(MAX_IMAGE)
+        .read_to_vec()?)
 }
 
 fn parse_search(html: &str) -> Vec<Link> {

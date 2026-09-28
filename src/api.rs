@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
+use std::io::IsTerminal;
 use std::sync::LazyLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use scraper::{Html, Selector};
@@ -30,9 +31,24 @@ pub struct Chapter {
     pub pages: u32,
 }
 
+static START: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+/// One line per request on stderr, only when it is redirected (`manga-sama 2> log`): the TUI owns the terminal.
+fn log(line: &str) {
+    if !std::io::stderr().is_terminal() {
+        eprintln!("{:8.3}s {line}", START.elapsed().as_secs_f64());
+    }
+}
+
 fn get(url: &str) -> Result<ureq::Body> {
-    let response = AGENT.get(url).call().map_err(|e| format!("{url} : {e}"))?;
-    Ok(response.into_body())
+    let sent = Instant::now();
+    let response = AGENT.get(url).call();
+    let ms = sent.elapsed().as_millis();
+    match &response {
+        Ok(response) => log(&format!("{} {ms:>4} ms {url}", response.status().as_u16())),
+        Err(e) => log(&format!("ERR {ms:>4} ms {url} : {e}")),
+    }
+    Ok(response.map_err(|e| format!("{url} : {e}"))?.into_body())
 }
 
 fn encode(s: &str) -> String {

@@ -59,7 +59,7 @@ impl Pages {
     /// Asks for the pages of `chapter`, `start` first. Returns the id that tags their results.
     pub fn request(&mut self, title: &str, chapter: Chapter, start: u32, width: u32) -> u64 {
         self.last_job += 1;
-        // Fails only if the worker is gone; the pages then stay "Chargement…".
+        // Fails only if the worker is gone; the pages then stay loading.
         let _ = self.jobs.send(Job::Show(Show {
             id: self.last_job,
             title: title.to_string(),

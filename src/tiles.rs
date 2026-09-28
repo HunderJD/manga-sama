@@ -17,7 +17,7 @@ use crate::api::{self, Link};
 use crate::kitty::{self, Geo, Placement, Stored};
 use crate::pages::{self, Image};
 
-/// Tile width in cells. The cover's height follows the thumbnails' 440×248 aspect.
+/// Tile width in cells, a look choice: smaller means more covers per row but shorter titles.
 const TILE_COLS: u16 = 18;
 const GAP: u16 = 1;
 
@@ -157,7 +157,8 @@ impl Tiles {
     }
 }
 
-/// Rows taken by a cover `TILE_COLS` wide, from the thumbnails' 440×248 aspect.
+/// Rows taken by a cover `TILE_COLS` wide. Thumbnails are 440×248 px (checked on jsDelivr),
+/// so its height is the width × 248 / 440, rounded to whole rows.
 fn cover_rows(geo: Geo) -> u16 {
     let px = u32::from(TILE_COLS) * geo.cell_w * 248 / 440;
     ((px + geo.cell_h / 2) / geo.cell_h).max(1) as u16

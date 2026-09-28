@@ -26,7 +26,7 @@ struct Found {
     result: Result<Vec<Link>, String>,
 }
 
-/// What to fetch once "Chargement…" is on screen.
+/// What to fetch once the loading message is on screen.
 enum Todo {
     Versions { slug: String, name: String },
     Chapters { slug: String, path: String },
@@ -53,9 +53,7 @@ pub struct Search {
     versions: Option<Versions>,
     todo: Option<Todo>,
     status: String,
-    /// The help popup is open.
     help: bool,
-    /// The language list, when open.
     languages: Option<ListState>,
     /// Results as cover tiles instead of a list; Ctrl+T switches.
     grid: bool,
@@ -163,7 +161,7 @@ impl Search {
             return;
         }
         self.asked = query.to_string();
-        // Fails only if the search thread is gone; the status then stays "Recherche…".
+        // Fails only if the search thread is gone; the status then stays on "searching".
         let _ = self.queries.send(self.asked.clone());
     }
 
@@ -369,6 +367,7 @@ impl Search {
 fn search(queries: Receiver<String>, found: Sender<Found>) -> Option<()> {
     loop {
         let query = queries.recv().ok()?;
+        // Queries typed while the last search ran are outdated: keep only the newest.
         let query = queries.try_iter().last().unwrap_or(query);
         let result = api::search(&query).map_err(|e| e.to_string());
         found.send(Found { query, result }).ok()?;

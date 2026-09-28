@@ -1,10 +1,5 @@
-use std::fmt::Write as _;
-use std::io::{Write, stdout};
-use std::os::unix::ffi::OsStrExt;
 use std::time::Duration;
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use ratatui::crossterm::terminal::window_size;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -14,7 +9,8 @@ use ratatui::{DefaultTerminal, Frame};
 
 use crate::Result;
 use crate::api::Chapter;
-use crate::pages::{Image, Loaded, Pages};
+use crate::kitty::{self, Placement};
+use crate::pages::{Loaded, Pages};
 
 /// Pages are at most this wide, like on the site.
 const MAX_WIDTH_PX: u32 = 900;
@@ -41,29 +37,6 @@ const HELP: [&str; 8] = [
 pub enum Exit {
     Quit,
     Back,
-}
-
-fn kitty(commands: &str) -> Result<()> {
-    let mut out = stdout().lock();
-    out.write_all(commands.as_bytes())?;
-    out.flush()?;
-    Ok(())
-}
-
-/// Hands the pixels to kitty through a temporary file that kitty deletes after reading (`t=t`),
-/// so megabytes of image never go through the terminal.
-fn transmit(id: u32, image: &Image) -> Result<()> {
-    let name = format!(
-        "tty-graphics-protocol-manga-sama-{}-{id}",
-        std::process::id()
-    );
-    let path = std::env::temp_dir().join(name);
-    std::fs::write(&path, &image.rgb)?;
-    let path = STANDARD.encode(path.as_os_str().as_bytes());
-    kitty(&format!(
-        "\x1b_Ga=t,t=t,f=24,s={},v={},i={id},q=2;{path}\x1b\\",
-        image.width, image.height
-    ))
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -155,18 +128,6 @@ fn ease(pending: i64) -> i64 {
     }
 }
 
-/// Part of an image shown 1:1: source rectangle in pixels, drawn from cell (`x`, `y`) + `offset` px down.
-#[derive(PartialEq)]
-struct Placement {
-    id: u32,
-    x: u16,
-    y: u16,
-    offset: u32,
-    src_y: u32,
-    src_w: u32,
-    src_h: u32,
-}
-
 enum Page {
     Loading,
     Failed(String),
@@ -254,15 +215,18 @@ impl Reader<'_> {
         Ok(())
     }
 
+    /// Frees the chapter's images from kitty's memory.
     fn delete_images(&mut self) -> Result<()> {
-        let mut commands = String::new();
-        for page in &self.pages {
-            if let Page::Ready { id, .. } = page {
-                write!(commands, "\x1b_Ga=d,d=I,i={id},q=2\x1b\\")?;
-            }
-        }
+        let commands: String = self
+            .pages
+            .iter()
+            .filter_map(|page| match page {
+                Page::Ready { id, .. } => Some(kitty::free(*id)),
+                _ => None,
+            })
+            .collect();
         self.shown.clear();
-        kitty(&commands)
+        kitty::send(&commands)
     }
 
     fn receive(&mut self, loaded: Loaded) -> Result<()> {
@@ -275,7 +239,7 @@ impl Reader<'_> {
         *slot = match loaded.image {
             Ok(image) => {
                 self.last_id += 1;
-                transmit(self.last_id, &image)?;
+                kitty::transmit(self.last_id, &image)?;
                 Page::Ready {
                     id: self.last_id,
                     width: image.width,
@@ -333,73 +297,11 @@ impl Reader<'_> {
         let [main, bar] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(u16::from(self.bar))])
                 .areas(frame.area());
-        let geo = self.geo;
-        let placeholder = geo.page_px() * 3 / 2;
-        self.heights = self
-            .pages
-            .iter()
-            .map(|page| match page {
-                Page::Ready { height, .. } => *height,
-                _ => placeholder,
-            })
-            .collect();
-        self.view = u32::from(main.height) * geo.cell_h;
-        self.pos = scroll(&self.heights, self.view, geo.cell_h, self.pos, 0);
-
-        let cols = geo.page_cols().min(main.width);
-        let x = main.x + (main.width - cols) / 2;
-        // Pixels from the top of `main`.
-        let mut y = 0;
-        let mut placements = Vec::new();
-        for (page, top, height) in visible(&self.heights, self.view, self.pos) {
-            let row = (y / geo.cell_h) as u16;
-            match &self.pages[page] {
-                Page::Ready { id, width, .. } => placements.push(Placement {
-                    id: *id,
-                    x,
-                    y: main.y + row,
-                    offset: y % geo.cell_h,
-                    src_y: top,
-                    src_w: *width,
-                    src_h: height,
-                }),
-                other => {
-                    let rows = (y + height).div_ceil(geo.cell_h) as u16 - row;
-                    let area = Rect::new(x, main.y + row, cols, rows);
-                    match other {
-                        Page::Failed(e) => message(frame, area, &format!("Erreur : {e}")),
-                        _ => message(frame, area, "Chargement…"),
-                    }
-                }
-            }
-            y += height;
-        }
-        let end_row = y.div_ceil(geo.cell_h) as u16;
-        if end_row < main.height {
-            let end = match self.chapters.get(self.chapter + 1) {
-                Some(_) => format!(
-                    "Fin du chapitre {} · l : chapitre suivant",
-                    self.chapters[self.chapter].number
-                ),
-                None => "Dernier chapitre.".to_string(),
-            };
-            let line = Rect::new(main.x, main.y + end_row, main.width, 1);
-            frame.render_widget(Paragraph::new(end).centered().dim(), line);
-        }
-
+        self.layout(main);
+        let placements = self.draw_pages(frame, main);
         if self.bar {
-            let chapter = self.chapters[self.chapter];
-            let status = format!(
-                "{} · Chapitre {}/{} · Page {}/{} · ? aide",
-                self.title.trim(),
-                chapter.number,
-                self.chapters.len(),
-                self.pos.page + 1,
-                chapter.pages,
-            );
-            frame.render_widget(Paragraph::new(status).reversed(), bar);
+            self.draw_bar(frame, bar);
         }
-
         match &mut self.overlay {
             None => return placements,
             Some(Overlay::Chapters(list)) => {
@@ -418,34 +320,98 @@ impl Reader<'_> {
         Vec::new()
     }
 
+    /// Page heights and view size for this frame, keeping the view inside the chapter.
+    fn layout(&mut self, main: Rect) {
+        let placeholder = self.geo.page_px() * 3 / 2;
+        self.heights = self
+            .pages
+            .iter()
+            .map(|page| match page {
+                Page::Ready { height, .. } => *height,
+                _ => placeholder,
+            })
+            .collect();
+        self.view = u32::from(main.height) * self.geo.cell_h;
+        self.pos = scroll(&self.heights, self.view, self.geo.cell_h, self.pos, 0);
+    }
+
+    /// Draws "Chargement…", errors and the end line; returns where the page images go.
+    fn draw_pages(&self, frame: &mut Frame, main: Rect) -> Vec<Placement> {
+        let geo = self.geo;
+        let cols = geo.page_cols().min(main.width);
+        let x = main.x + (main.width - cols) / 2;
+        // Pixels from the top of `main`.
+        let mut y = 0;
+        let mut placements = Vec::new();
+        for (page, top, height) in visible(&self.heights, self.view, self.pos) {
+            let row = (y / geo.cell_h) as u16;
+            let text = match &self.pages[page] {
+                Page::Ready { id, width, .. } => {
+                    placements.push(Placement {
+                        id: *id,
+                        x,
+                        y: main.y + row,
+                        offset: y % geo.cell_h,
+                        src_y: top,
+                        src_w: *width,
+                        src_h: height,
+                    });
+                    None
+                }
+                Page::Loading => Some("Chargement…".to_string()),
+                Page::Failed(e) => Some(format!("Erreur : {e}")),
+            };
+            if let Some(text) = text {
+                let rows = (y + height).div_ceil(geo.cell_h) as u16 - row;
+                message(frame, Rect::new(x, main.y + row, cols, rows), &text);
+            }
+            y += height;
+        }
+
+        let end_row = y.div_ceil(geo.cell_h) as u16;
+        if end_row < main.height {
+            let end = match self.chapters.get(self.chapter + 1) {
+                Some(_) => format!(
+                    "Fin du chapitre {} · l : chapitre suivant",
+                    self.chapters[self.chapter].number
+                ),
+                None => "Dernier chapitre.".to_string(),
+            };
+            let line = Rect::new(main.x, main.y + end_row, main.width, 1);
+            frame.render_widget(Paragraph::new(end).centered().dim(), line);
+        }
+        placements
+    }
+
+    fn draw_bar(&self, frame: &mut Frame, area: Rect) {
+        let chapter = self.chapters[self.chapter];
+        let status = format!(
+            "{} · Chapitre {}/{} · Page {}/{} · ? aide",
+            self.title.trim(),
+            chapter.number,
+            self.chapters.len(),
+            self.pos.page + 1,
+            chapter.pages,
+        );
+        frame.render_widget(Paragraph::new(status).reversed(), area);
+    }
+
     /// Sends kitty only what changed since the last frame, in one write.
     fn place(&mut self, placements: Vec<Placement>) -> Result<()> {
         if placements == self.shown {
             return Ok(());
         }
-        let mut commands = String::new();
-        for gone in self
+        let gone = self
             .shown
             .iter()
             .filter(|old| !placements.iter().any(|p| p.id == old.id))
-        {
-            write!(commands, "\x1b_Ga=d,d=i,i={},q=2\x1b\\", gone.id)?;
-        }
-        // Same image id and placement id (p=1): kitty moves the placement instead of adding one.
-        for p in placements.iter().filter(|p| !self.shown.contains(p)) {
-            write!(
-                commands,
-                "\x1b[{};{}H\x1b_Ga=p,i={},p=1,x=0,y={},w={},h={},Y={},C=1,q=2\x1b\\",
-                p.y + 1,
-                p.x + 1,
-                p.id,
-                p.src_y,
-                p.src_w,
-                p.src_h,
-                p.offset,
-            )?;
-        }
-        kitty(&commands)?;
+            .map(|old| kitty::hide(old.id));
+        let moved = placements
+            .iter()
+            .filter(|p| !self.shown.contains(p))
+            .map(kitty::place);
+        let commands: String = gone.chain(moved).collect();
+        kitty::send(&commands)?;
         self.shown = placements;
         Ok(())
     }

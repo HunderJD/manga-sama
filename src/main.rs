@@ -1,4 +1,5 @@
 mod api;
+mod kitty;
 mod pages;
 mod reader;
 mod search;

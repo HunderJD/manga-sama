@@ -11,7 +11,7 @@ use ratatui::{DefaultTerminal, Frame};
 
 use crate::Result;
 use crate::api::Chapter;
-use crate::i18n::{t, tf};
+use crate::i18n::{self, t, tf};
 use crate::kitty::{self, Placement};
 use crate::pages::{Loaded, Pages};
 
@@ -338,12 +338,7 @@ impl Reader<'_> {
             }
             Some(Overlay::Help) => {
                 let items = t("reader.help").lines().map(String::from).collect();
-                crate::popup(
-                    frame,
-                    t("reader.help_title"),
-                    items,
-                    &mut ListState::default(),
-                );
+                crate::popup(frame, t("help"), items, &mut ListState::default());
             }
         }
         // Images are drawn above the text: hide them while a popup is open.
@@ -452,8 +447,13 @@ impl Reader<'_> {
     fn handle(&mut self, event: Event) -> Result<Option<Exit>> {
         let code = match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-                    return Ok(Some(Exit::Quit));
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    match key.code {
+                        KeyCode::Char('c') => return Ok(Some(Exit::Quit)),
+                        KeyCode::Char('l') => i18n::next_language(),
+                        _ => {}
+                    }
+                    return Ok(None);
                 }
                 key.code
             }

@@ -11,7 +11,7 @@ use ratatui::{DefaultTerminal, Frame};
 
 use crate::Result;
 use crate::api::{self, Chapter, Link};
-use crate::i18n::{t, tf};
+use crate::i18n::{self, t, tf};
 
 /// Time without typing before searching.
 const DEBOUNCE: Duration = Duration::from_millis(350);
@@ -41,6 +41,8 @@ pub struct Search {
     versions: Option<(String, Vec<Link>, ListState)>,
     todo: Option<Todo>,
     status: String,
+    /// The help popup is open.
+    help: bool,
     queries: Sender<String>,
     found: Receiver<Found>,
 }
@@ -60,6 +62,7 @@ impl Search {
             versions: None,
             todo: None,
             status: String::new(),
+            help: false,
             queries,
             found,
         }
@@ -174,6 +177,15 @@ impl Search {
         if ctrl && key.code == KeyCode::Char('c') {
             return true;
         }
+        if ctrl && key.code == KeyCode::Char('l') {
+            i18n::next_language();
+            return false;
+        }
+        if self.help {
+            // Any key closes the help.
+            self.help = false;
+            return false;
+        }
         if self.versions.is_some() {
             self.handle_versions(key.code);
             return false;
@@ -193,6 +205,7 @@ impl Search {
                 self.query.pop();
                 self.edited();
             }
+            KeyCode::Char('?') => self.help = true,
             KeyCode::Char(c) if !ctrl => {
                 self.query.push(c);
                 self.edited();
@@ -261,6 +274,10 @@ impl Search {
         if let Some((_, versions, list)) = &mut self.versions {
             let items = versions.iter().map(|v| v.name.clone()).collect();
             crate::popup(frame, t("search.version"), items, list);
+        }
+        if self.help {
+            let items = t("search.help").lines().map(String::from).collect();
+            crate::popup(frame, t("help"), items, &mut ListState::default());
         }
     }
 }

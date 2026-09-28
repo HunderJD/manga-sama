@@ -74,6 +74,20 @@ fn command(keys: &str) -> String {
 
 /// Stores `image` in kitty, without showing it. The pixels go through a temporary file that
 /// kitty deletes after reading (`t=t`), so megabytes never go through the terminal.
+/// Deletes the transfer files kitty never read (it deletes the ones it reads), e.g. when the app
+/// quits before kitty got to them.
+pub fn cleanup() {
+    let prefix = format!("tty-graphics-protocol-manga-sama-{}-", std::process::id());
+    let Ok(files) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    for file in files.flatten() {
+        if file.file_name().to_string_lossy().starts_with(&prefix) {
+            let _ = std::fs::remove_file(file.path());
+        }
+    }
+}
+
 pub fn transmit(image: &Image) -> Result<Stored> {
     // One counter for the whole app, so covers and pages never share an id.
     static NEXT_ID: AtomicU32 = AtomicU32::new(1);

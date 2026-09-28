@@ -29,6 +29,7 @@ fn main() {
         .and_then(|()| run(&mut terminal));
     let _ = execute!(stdout(), DisableMouseCapture);
     ratatui::restore();
+    kitty::cleanup();
     if let Err(e) = result {
         eprintln!("{}", i18n::tf("error", &[("e", &e)]));
         std::process::exit(1);

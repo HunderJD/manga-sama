@@ -20,6 +20,9 @@ use crate::pages::{Image, Loaded, Pages};
 const MAX_WIDTH_PX: u32 = 900;
 /// Rows scrolled by j/k and by one mouse wheel notch.
 const STEP_ROWS: u32 = 3;
+/// After this many scrolls in a chapter, the next chapters are downloaded ahead.
+const PREFETCH_AFTER: u32 = 3;
+const PREFETCH_CHAPTERS: usize = 4;
 /// Share of the remaining scroll done each frame: an ease-out, like CSS `scroll-behavior: smooth`.
 const EASE: f64 = 0.3;
 
@@ -138,6 +141,12 @@ fn visible(heights: &[u32], view: u32, pos: Pos) -> Vec<(usize, u32, u32)> {
     slices
 }
 
+/// The chapters to download ahead while reading chapter `current`.
+fn next_chapters(chapters: &[Chapter], current: usize) -> &[Chapter] {
+    let start = (current + 1).min(chapters.len());
+    &chapters[start..(start + PREFETCH_CHAPTERS).min(chapters.len())]
+}
+
 /// Part of the pending scroll to do this frame: at least 1 px, never past it.
 fn ease(pending: i64) -> i64 {
     match (pending as f64 * EASE) as i64 {
@@ -179,6 +188,8 @@ struct Reader<'a> {
     pos: Pos,
     /// Pixels still to scroll, done a bit each frame.
     pending: i64,
+    /// Scroll actions in this chapter, to start the prefetch.
+    scrolls: u32,
     geo: Geo,
     /// Pixel heights of each page and of the view, from the last frame.
     heights: Vec<u32>,
@@ -205,6 +216,7 @@ pub fn run(
         pages: Vec::new(),
         pos: Pos::default(),
         pending: 0,
+        scrolls: 0,
         geo: Geo::now()?,
         heights: Vec::new(),
         view: 0,
@@ -226,6 +238,7 @@ impl Reader<'_> {
         self.chapter = chapter;
         self.pos = Pos::default();
         self.pending = 0;
+        self.scrolls = 0;
         self.load()
     }
 
@@ -499,6 +512,11 @@ impl Reader<'_> {
 
     fn scroll_by(&mut self, delta: i64) {
         self.pending += delta;
+        self.scrolls += 1;
+        if self.scrolls == PREFETCH_AFTER {
+            let next = next_chapters(&self.chapters, self.chapter);
+            self.io.prefetch(&self.title, next);
+        }
     }
 }
 
@@ -544,6 +562,18 @@ mod tests {
         assert_eq!(ease(-60), -18);
         assert_eq!(ease(3), 1);
         assert_eq!(ease(-1), -1);
+    }
+
+    #[test]
+    fn prefetched_chapters() {
+        let chapters: Vec<_> = (1..=6).map(|number| Chapter { number, pages: 1 }).collect();
+        let numbers = |current| {
+            let next = next_chapters(&chapters, current);
+            next.iter().map(|c| c.number).collect::<Vec<_>>()
+        };
+        assert_eq!(numbers(0), [2, 3, 4, 5]);
+        assert_eq!(numbers(4), [6]);
+        assert!(numbers(5).is_empty());
     }
 
     #[test]

@@ -127,8 +127,28 @@ enum Page {
 }
 
 enum Overlay {
-    Chapters(ListState),
+    /// `filter`: the chapter number typed so far.
+    Chapters {
+        list: ListState,
+        filter: String,
+    },
     Help,
+}
+
+fn chapter_list(selected: usize) -> Overlay {
+    let list = ListState::default().with_selected(Some(selected));
+    Overlay::Chapters {
+        list,
+        filter: String::new(),
+    }
+}
+
+/// Indexes of the chapters whose number starts with `filter`.
+fn matching(chapters: &[Chapter], filter: &str) -> Vec<usize> {
+    let starts = |c: &Chapter| c.number.to_string().starts_with(filter);
+    (0..chapters.len())
+        .filter(|&i| starts(&chapters[i]))
+        .collect()
 }
 
 struct Reader<'a> {
@@ -177,9 +197,7 @@ pub fn run(
         heights: Vec::new(),
         view: 0,
         bar: true,
-        overlay: Some(Overlay::Chapters(
-            ListState::default().with_selected(Some(0)),
-        )),
+        overlay: Some(chapter_list(0)),
         last_id: 0,
         shown: Vec::new(),
     };
@@ -310,12 +328,13 @@ impl Reader<'_> {
         }
         match &mut self.overlay {
             None => return placements,
-            Some(Overlay::Chapters(list)) => {
-                let items = self
-                    .chapters
-                    .iter()
-                    .map(|c| tf("reader.chapter", &[("n", &c.number)]));
-                crate::popup(frame, t("reader.chapters"), items.collect(), list);
+            Some(Overlay::Chapters { list, filter }) => {
+                let items = matching(&self.chapters, filter)
+                    .into_iter()
+                    .map(|i| tf("reader.chapter", &[("n", &self.chapters[i].number)]))
+                    .collect();
+                let title = format!("{} {filter}", t("reader.chapters"));
+                crate::popup(frame, title.trim_end(), items, list);
             }
             Some(Overlay::Help) => {
                 let items = t("reader.help").lines().map(String::from).collect();
@@ -446,15 +465,12 @@ impl Reader<'_> {
         let half = i64::from(self.view / 2);
         match code {
             KeyCode::Char('q') => return Ok(Some(Exit::Quit)),
-            // Back to the search from anywhere, even from the chapter list.
-            KeyCode::Backspace => return Ok(Some(Exit::Back)),
+            // Back to the search from anywhere, unless it erases a typed chapter number.
+            KeyCode::Backspace if !self.typing() => return Ok(Some(Exit::Back)),
             KeyCode::F(2) => self.bar = !self.bar,
             _ if self.overlay.is_some() => self.handle_overlay(code)?,
             KeyCode::Esc => return Ok(Some(Exit::Back)),
-            KeyCode::F(1) => {
-                let list = ListState::default().with_selected(Some(self.chapter));
-                self.overlay = Some(Overlay::Chapters(list));
-            }
+            KeyCode::F(1) => self.overlay = Some(chapter_list(self.chapter)),
             KeyCode::Char('?') => self.overlay = Some(Overlay::Help),
             KeyCode::Char('j') | KeyCode::Down => self.scroll_by(step),
             KeyCode::Char('k') | KeyCode::Up => self.scroll_by(-step),
@@ -472,17 +488,32 @@ impl Reader<'_> {
     }
 
     fn handle_overlay(&mut self, code: KeyCode) -> Result<()> {
-        let Some(Overlay::Chapters(list)) = &mut self.overlay else {
+        let Some(Overlay::Chapters { list, filter }) = &mut self.overlay else {
             // Any key closes the help.
             self.overlay = None;
             return Ok(());
         };
         match code {
+            KeyCode::Char(digit) if digit.is_ascii_digit() => {
+                filter.push(digit);
+                list.select(Some(0));
+            }
+            KeyCode::Backspace => {
+                filter.pop();
+                list.select(Some(0));
+            }
             KeyCode::Char('j') | KeyCode::Down => list.select_next(),
             KeyCode::Char('k') | KeyCode::Up => list.select_previous(),
             KeyCode::Enter => {
+                let shown = matching(&self.chapters, filter);
                 // ListState only clamps its selection when rendered.
-                let chapter = list.selected().unwrap_or(0).min(self.chapters.len() - 1);
+                let selected = list
+                    .selected()
+                    .unwrap_or(0)
+                    .min(shown.len().saturating_sub(1));
+                let Some(&chapter) = shown.get(selected) else {
+                    return Ok(());
+                };
                 self.overlay = None;
                 self.open(chapter)?;
             }
@@ -496,6 +527,11 @@ impl Reader<'_> {
             _ => {}
         }
         Ok(())
+    }
+
+    /// A chapter number is being typed in the chapter list.
+    fn typing(&self) -> bool {
+        matches!(&self.overlay, Some(Overlay::Chapters { filter, .. }) if !filter.is_empty())
     }
 
     fn scroll_by(&mut self, delta: i64) {
@@ -564,6 +600,14 @@ mod tests {
         assert_eq!(numbers(0), [2, 3, 4, 5]);
         assert_eq!(numbers(4), [6]);
         assert!(numbers(5).is_empty());
+    }
+
+    #[test]
+    fn chapter_filter() {
+        let chapters = [1, 2, 12, 21, 120].map(|number| Chapter { number, pages: 1 });
+        assert_eq!(matching(&chapters, ""), [0, 1, 2, 3, 4]);
+        assert_eq!(matching(&chapters, "12"), [2, 4]);
+        assert!(matching(&chapters, "9").is_empty());
     }
 
     #[test]

@@ -29,7 +29,7 @@ Le lecteur s'ouvre sur la liste des chapitres. Échap revient en arrière.
 | `j` `k` molette | défiler                             |
 | `d` `u`         | demi-écran                          |
 | `h` `l`         | chapitre précédent / suivant        |
-| `F1`            | liste des chapitres                 |
+| `F1`            | liste des chapitres (tape un numéro pour y aller) |
 | `F2`            | masquer la barre                    |
 | `⌫` `Échap`     | retour à la recherche               |
 | `q`             | quitter                             |

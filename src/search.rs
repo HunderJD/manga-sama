@@ -16,7 +16,7 @@ use crate::kitty::{self, Geo, Placement};
 use crate::tiles::{self, Tiles};
 
 /// Time without typing before searching.
-const DEBOUNCE: Duration = Duration::from_millis(350);
+const DEBOUNCE: Duration = Duration::from_millis(500);
 /// One letter would list the whole catalogue.
 const MIN_CHARS: usize = 2;
 

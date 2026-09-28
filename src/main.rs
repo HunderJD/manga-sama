@@ -1,68 +1,20 @@
 mod api;
 mod reader;
+mod search;
 
 use std::io::stdout;
 
-use inquire::{InquireError, Select, Text};
-use ratatui::Frame;
 use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use ratatui::crossterm::execute;
 use ratatui::layout::Constraint;
 use ratatui::style::Modifier;
 use ratatui::widgets::{Block, Clear, List, ListState};
+use ratatui::{DefaultTerminal, Frame};
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
 fn main() {
-    match run() {
-        Ok(()) => {}
-        Err(e) if matches!(e.downcast_ref(), Some(InquireError::OperationInterrupted)) => {}
-        Err(e) => {
-            eprintln!("Erreur : {e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-fn run() -> Result<()> {
-    let mut query = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
-    loop {
-        if query.trim().is_empty() {
-            match Text::new("Recherche :").prompt_skippable()? {
-                Some(q) if !q.trim().is_empty() => query = q,
-                _ => return Ok(()),
-            }
-        }
-        let works = api::search(query.trim())?;
-        query.clear();
-        if works.is_empty() {
-            println!("Aucun résultat.");
-            continue;
-        }
-        let Some(work) = Select::new("Titre :", works).prompt_skippable()? else {
-            return Ok(());
-        };
-
-        let mut versions = api::versions(&work.path)?;
-        let version = match versions.len() {
-            0 => {
-                println!("Aucun scan pour ce titre.");
-                continue;
-            }
-            1 => versions.pop(),
-            _ => Select::new("Version :", versions).prompt_skippable()?,
-        };
-        let Some(version) = version else {
-            return Ok(());
-        };
-
-        let title = api::title(&work.path, &version.path)?;
-        let chapters = api::chapters(&title)?;
-        return tui(title, chapters);
-    }
-}
-
-fn tui(title: String, chapters: Vec<api::Chapter>) -> Result<()> {
+    let query = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
     let mut terminal = ratatui::init();
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -71,10 +23,24 @@ fn tui(title: String, chapters: Vec<api::Chapter>) -> Result<()> {
     }));
     let result = execute!(stdout(), EnableMouseCapture)
         .map_err(Into::into)
-        .and_then(|()| reader::run(&mut terminal, &mut reader::Pages::spawn(), title, chapters));
+        .and_then(|()| run(&mut terminal, query));
     let _ = execute!(stdout(), DisableMouseCapture);
     ratatui::restore();
-    result.map(|_| ())
+    if let Err(e) = result {
+        eprintln!("Erreur : {e}");
+        std::process::exit(1);
+    }
+}
+
+fn run(terminal: &mut DefaultTerminal, query: String) -> Result<()> {
+    let mut search = search::Search::new(query);
+    let mut pages = reader::Pages::spawn();
+    while let Some((title, chapters)) = search.run(terminal)? {
+        if reader::run(terminal, &mut pages, title, chapters)? == reader::Exit::Quit {
+            break;
+        }
+    }
+    Ok(())
 }
 
 /// A bordered list in the middle of the screen: versions, chapters, help.

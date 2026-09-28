@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fmt;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -19,16 +18,10 @@ static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
         .into()
 });
 
-/// A choice shown by inquire: a work (`path` = slug) or a scan version (`path` = "scan/vf").
+/// A search result (`path` = slug) or a scan version (`path` = "scan/vf").
 pub struct Link {
     pub name: String,
     pub path: String,
-}
-
-impl fmt::Display for Link {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(&self.name)
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

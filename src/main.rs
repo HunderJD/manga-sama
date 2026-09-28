@@ -15,7 +15,6 @@ use ratatui::{DefaultTerminal, Frame};
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
 fn main() {
-    let query = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
     let mut terminal = ratatui::init();
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -24,7 +23,7 @@ fn main() {
     }));
     let result = execute!(stdout(), EnableMouseCapture)
         .map_err(Into::into)
-        .and_then(|()| run(&mut terminal, query));
+        .and_then(|()| run(&mut terminal));
     let _ = execute!(stdout(), DisableMouseCapture);
     ratatui::restore();
     if let Err(e) = result {
@@ -33,8 +32,8 @@ fn main() {
     }
 }
 
-fn run(terminal: &mut DefaultTerminal, query: String) -> Result<()> {
-    let mut search = search::Search::new(query);
+fn run(terminal: &mut DefaultTerminal) -> Result<()> {
+    let mut search = search::Search::new();
     let mut pages = pages::Pages::spawn();
     while let Some((title, chapters)) = search.run(terminal)? {
         if reader::run(terminal, &mut pages, title, chapters)? == reader::Exit::Quit {

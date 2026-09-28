@@ -298,12 +298,14 @@ impl Search {
     /// Draws the screen and returns where kitty must draw the covers.
     fn draw(&mut self, frame: &mut Frame) -> Vec<Placement> {
         if let Some(versions) = &mut self.versions {
-            // A screen of its own: "<work> · Version" and the choices.
-            let title = format!(" {} · {} ", versions.name, t("search.version"));
-            let list = List::new(versions.links.iter().map(|link| link.name.as_str()))
-                .block(Block::bordered().title(title))
-                .highlight_style(Modifier::REVERSED);
-            frame.render_stateful_widget(list, frame.area(), &mut versions.list);
+            // A small box on a blank screen: "<work> · Version" and the choices.
+            let title = format!("{} · {}", versions.name, t("search.version"));
+            let items = versions
+                .links
+                .iter()
+                .map(|link| link.name.clone())
+                .collect();
+            crate::popup(frame, &title, items, &mut versions.list);
             if let Some(list) = &mut self.languages {
                 crate::draw_languages(frame, list);
             }

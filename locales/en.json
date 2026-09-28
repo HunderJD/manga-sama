@@ -9,7 +9,7 @@
   "search.version": "Version",
   "reader.chapter": "Chapter {n}",
   "reader.chapters": "Chapters",
-  "reader.help": "j k  wheel  scroll\nd u         half screen\nh l         previous / next chapter\nF1          chapter list (type a number)\nF2          hide the bar\nCtrl+L      language: English\n?           this help\n⌫ Esc       back\nq           quit",
+  "reader.help": "j k  wheel  scroll\nd u         half screen\nh l         previous / next chapter\nF1          chapter list (type a number)\nF2          hide the bar\nCtrl+L      languages\n?           this help\n⌫ Esc       back\nq           quit",
   "reader.status": "{title} · Chapter {chapter}/{chapters} · Page {page}/{pages} · ? help",
   "reader.end": "End of chapter {n} · l: next chapter",
   "reader.last": "Last chapter.",
@@ -18,5 +18,7 @@
   "api.bad_chapters": "invalid chapter list: {json}",
   "pages.bad_image": "unreadable image: {e}",
   "help": "Help",
-  "search.help": "↑ ↓         select\nEnter       open\nCtrl+L      language: English\n?           this help\nEsc         quit"
+  "search.help": "↑ ↓         select\nEnter       open\nCtrl+L      languages\n?           this help\nEsc         quit",
+  "language": "English",
+  "languages": "Languages"
 }

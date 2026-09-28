@@ -1,45 +1,83 @@
 # manga-sama
 
-Lecteur de scans [Anime-Sama](https://anime-sama.to) dans le terminal.
-Les pages défilent comme sur le site, affichées avec le protocole graphique de [kitty](https://sw.kovidgoyal.net/kitty/) (requis).
+Read [Anime-Sama](https://anime-sama.to) scans in your terminal.
+Search a title, pick a chapter, and scroll through the pages like on the website.
 
-> Client non officiel, non affilié à Anime-Sama. Le contenu appartient à ses ayants droit.
+🇫🇷 [Version française](README.fr.md)
 
-## Installation
+> [!WARNING]
+> **This is not an official Anime-Sama client.**
+> I'm not affiliated with Anime-Sama in any way, and the scans belong to their rights holders.
+>
+> If you want to let the Anime-Sama team know about this project, go ahead, I don't mind.
+> And if you want to work on it with me, you're welcome.
+
+## What you need
+
+- [kitty](https://sw.kovidgoyal.net/kitty/). Pages are drawn with its graphics protocol, so other terminals won't show them.
+- Rust, to build it.
+
+## Install
 
 ```sh
+git clone https://github.com/HunderJD/manga-sama
+cd manga-sama
 cargo install --path .
 ```
 
-## Utilisation
+## Usage
 
 ```sh
 manga-sama
 ```
 
-Tape au moins 2 caractères (la recherche part après 350 ms sans frappe), `↑` `↓` pour choisir, Entrée pour ouvrir.
-`?` affiche l'aide, `Ctrl+L` change la langue (anglais / français), partout dans l'app.
-Le lecteur s'ouvre sur la liste des chapitres. Échap revient en arrière.
+Type at least two letters, the search starts as soon as you stop typing.
+The reader opens on the chapter list.
 
-## Touches du lecteur
+### Search
 
-`?` affiche l'aide.
+| Key      |                  |
+|----------|------------------|
+| arrows   | move             |
+| `Enter`  | open             |
+| `Tab`    | tiles / list     |
+| `Ctrl+L` | language         |
+| `?`      | help             |
+| `Esc`    | quit             |
 
-| Touche          | Action                              |
-|-----------------|-------------------------------------|
-| `j` `k` molette | défiler                             |
-| `d` `u`         | demi-écran                          |
-| `h` `l`         | chapitre précédent / suivant        |
-| `F1`            | liste des chapitres (tape un numéro pour y aller) |
-| `F2`            | masquer la barre                    |
-| `⌫` `Échap`     | retour à la recherche               |
-| `q`             | quitter                             |
+### Reader
+
+| Key                   |                                            |
+|-----------------------|--------------------------------------------|
+| `j` `k`, mouse wheel  | scroll                                     |
+| `d` `u`               | half a screen                              |
+| `h` `l`               | previous / next chapter                    |
+| `F1`                  | chapter list, type a number to jump to it  |
+| `F2`                  | hide the status bar                        |
+| `Ctrl+L`              | language                                   |
+| `?`                   | help                                       |
+| `⌫` `Esc`             | back to the search                         |
+| `q`                   | quit                                       |
 
 ## Logs
 
-Une ligne par requête HTTP, seulement si la sortie d'erreur est redirigée :
+Every HTTP request is logged, but only when stderr is redirected:
 
 ```sh
-manga-sama 2> /tmp/manga-sama.log   # et dans un autre panneau :
-tail -f /tmp/manga-sama.log
+manga-sama 2> /tmp/manga-sama.log
+tail -f /tmp/manga-sama.log   # in another kitty window
 ```
+
+## Contributing
+
+Issues and pull requests are welcome.
+
+### About AI
+
+Writing code with AI is fine, I do it too. But you should be able to explain every line you send.
+Understand what you're doing, try to follow principles like SOLID, and keep it simple.
+Please don't just vibe-code something nobody can maintain.
+
+## License
+
+[MIT](LICENSE)

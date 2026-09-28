@@ -51,7 +51,7 @@ The reader opens on the chapter list.
 |-----------------------|--------------------------------------------|
 | `j` `k`, mouse wheel  | scroll                                     |
 | `d` `u`               | half a screen                              |
-| `h` `l`               | previous / next chapter                    |
+| `h` `l`, left / right click | previous / next chapter              |
 | `F1`                  | chapter list, type a number to jump to it  |
 | `F2`                  | hide the status bar                        |
 | `Ctrl+L`              | language                                   |

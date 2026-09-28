@@ -1,6 +1,8 @@
 use std::time::{Duration, Instant};
 
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
+use ratatui::crossterm::event::{
+    self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Stylize;
 use ratatui::widgets::{ListState, Paragraph, Wrap};
@@ -402,6 +404,13 @@ impl Reader<'_> {
             }
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => KeyCode::Down,
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => KeyCode::Up,
+            // Left click: previous chapter, right click: next one, like h and l.
+            Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
+                KeyCode::Left
+            }
+            Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Right) => {
+                KeyCode::Right
+            }
             _ => return Ok(None),
         };
         let step = i64::from(STEP_ROWS * self.geo.cell_h);

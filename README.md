@@ -14,11 +14,10 @@ cargo install --path .
 ## Utilisation
 
 ```sh
-manga-sama one piece   # recherche directe
-manga-sama             # recherche vide
+manga-sama
 ```
 
-Tape pour chercher (les résultats arrivent pendant la frappe), `↑` `↓` pour choisir, Entrée pour ouvrir.
+Tape au moins 2 caractères (la recherche part après 350 ms sans frappe), `↑` `↓` pour choisir, Entrée pour ouvrir.
 Le lecteur s'ouvre sur la liste des chapitres. Échap revient en arrière.
 
 ## Touches du lecteur
@@ -34,3 +33,12 @@ Le lecteur s'ouvre sur la liste des chapitres. Échap revient en arrière.
 | `F2`            | masquer la barre                    |
 | `Échap`         | retour à la recherche               |
 | `q`             | quitter                             |
+
+## Logs
+
+Une ligne par requête HTTP, seulement si la sortie d'erreur est redirigée :
+
+```sh
+manga-sama 2> /tmp/manga-sama.log   # et dans un autre panneau :
+tail -f /tmp/manga-sama.log
+```

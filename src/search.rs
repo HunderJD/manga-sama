@@ -11,7 +11,7 @@ use ratatui::{DefaultTerminal, Frame};
 
 use crate::Result;
 use crate::api::{self, Chapter, Link};
-use crate::i18n::{self, t, tf};
+use crate::i18n::{t, tf};
 
 /// Time without typing before searching.
 const DEBOUNCE: Duration = Duration::from_millis(350);
@@ -43,6 +43,8 @@ pub struct Search {
     status: String,
     /// The help popup is open.
     help: bool,
+    /// The language list, when open.
+    languages: Option<ListState>,
     queries: Sender<String>,
     found: Receiver<Found>,
 }
@@ -63,6 +65,7 @@ impl Search {
             todo: None,
             status: String::new(),
             help: false,
+            languages: None,
             queries,
             found,
         }
@@ -178,7 +181,16 @@ impl Search {
             return true;
         }
         if ctrl && key.code == KeyCode::Char('l') {
-            i18n::next_language();
+            self.languages = match self.languages {
+                Some(_) => None,
+                None => Some(crate::language_list()),
+            };
+            return false;
+        }
+        if let Some(list) = &mut self.languages {
+            if !crate::pick_language(list, key.code) {
+                self.languages = None;
+            }
             return false;
         }
         if self.help {
@@ -278,6 +290,9 @@ impl Search {
         if self.help {
             let items = t("search.help").lines().map(String::from).collect();
             crate::popup(frame, t("help"), items, &mut ListState::default());
+        }
+        if let Some(list) = &mut self.languages {
+            crate::draw_languages(frame, list);
         }
     }
 }

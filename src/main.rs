@@ -7,7 +7,7 @@ mod search;
 
 use std::io::stdout;
 
-use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture, KeyCode};
 use ratatui::crossterm::execute;
 use ratatui::layout::Constraint;
 use ratatui::style::Modifier;
@@ -45,7 +45,32 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
     Ok(())
 }
 
-/// A bordered list in the middle of the screen: versions, chapters, help.
+/// The language list opened with Ctrl+L, on the current language.
+fn language_list() -> ListState {
+    ListState::default().with_selected(Some(i18n::current()))
+}
+
+/// A key in the language list. Returns false once the list is closed.
+fn pick_language(list: &mut ListState, code: KeyCode) -> bool {
+    match code {
+        KeyCode::Char('j') | KeyCode::Down => list.select_next(),
+        KeyCode::Char('k') | KeyCode::Up => list.select_previous(),
+        KeyCode::Enter => {
+            i18n::set(list.selected().unwrap_or(0));
+            return false;
+        }
+        KeyCode::Esc => return false,
+        _ => {}
+    }
+    true
+}
+
+fn draw_languages(frame: &mut Frame, list: &mut ListState) {
+    let names = i18n::names().into_iter().map(String::from).collect();
+    popup(frame, i18n::t("languages"), names, list);
+}
+
+/// A bordered list in the middle of the screen: versions, chapters, help, languages.
 fn popup(frame: &mut Frame, title: &str, items: Vec<String>, state: &mut ListState) {
     let longest = items
         .iter()

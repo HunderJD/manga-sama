@@ -1,4 +1,4 @@
-//! UI texts, from the JSON files of `locales/` built into the binary. Ctrl+L switches language.
+//! UI texts, from the JSON files of `locales/` built into the binary. Ctrl+L lists the languages.
 
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 
-/// Built-in languages, in the order Ctrl+L cycles through them; the first is the default.
+/// Built-in languages, in the order Ctrl+L lists them; the first is the default.
 const LOCALES: [&str; 2] = [
     include_str!("../locales/en.json"),
     include_str!("../locales/fr.json"),
@@ -18,9 +18,21 @@ static TEXTS: LazyLock<Vec<HashMap<String, String>>> = LazyLock::new(|| {
 });
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
 
-/// Switches the UI to the next built-in language.
-pub fn next_language() {
-    CURRENT.store((CURRENT.load(Relaxed) + 1) % LOCALES.len(), Relaxed);
+/// Each built-in language's name, in that language: "English", "Français".
+pub fn names() -> Vec<&'static str> {
+    TEXTS
+        .iter()
+        .map(|texts| texts.get("language").map_or("?", String::as_str))
+        .collect()
+}
+
+pub fn current() -> usize {
+    CURRENT.load(Relaxed)
+}
+
+/// Switches the UI to the built-in language at `index` in `names()`.
+pub fn set(index: usize) {
+    CURRENT.store(index.min(LOCALES.len() - 1), Relaxed);
 }
 
 /// The text for `key`, or the key itself if it is missing.

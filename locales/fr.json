@@ -9,7 +9,7 @@
   "search.version": "Version",
   "reader.chapter": "Chapitre {n}",
   "reader.chapters": "Chapitres",
-  "reader.help": "j k  molette  défiler\nd u           demi-écran\nh l           chapitre précédent / suivant\nF1            liste des chapitres (tape un numéro)\nF2            masquer la barre\nCtrl+L        langue : français\n?             cette aide\n⌫ Échap       retour\nq             quitter",
+  "reader.help": "j k  molette  défiler\nd u           demi-écran\nh l           chapitre précédent / suivant\nF1            liste des chapitres (tape un numéro)\nF2            masquer la barre\nCtrl+L        langues\n?             cette aide\n⌫ Échap       retour\nq             quitter",
   "reader.status": "{title} · Chapitre {chapter}/{chapters} · Page {page}/{pages} · ? aide",
   "reader.end": "Fin du chapitre {n} · l : chapitre suivant",
   "reader.last": "Dernier chapitre.",
@@ -18,5 +18,7 @@
   "api.bad_chapters": "liste des chapitres invalide : {json}",
   "pages.bad_image": "image illisible : {e}",
   "help": "Aide",
-  "search.help": "↑ ↓           choisir\nEntrée        ouvrir\nCtrl+L        langue : français\n?             cette aide\nÉchap         quitter"
+  "search.help": "↑ ↓           choisir\nEntrée        ouvrir\nCtrl+L        langues\n?             cette aide\nÉchap         quitter",
+  "language": "Français",
+  "languages": "Langues"
 }

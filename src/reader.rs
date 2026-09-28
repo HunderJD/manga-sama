@@ -11,7 +11,7 @@ use ratatui::{DefaultTerminal, Frame};
 
 use crate::Result;
 use crate::api::Chapter;
-use crate::i18n::{self, t, tf};
+use crate::i18n::{t, tf};
 use crate::kitty::{self, Placement};
 use crate::pages::{Loaded, Pages};
 
@@ -133,6 +133,7 @@ enum Overlay {
         filter: String,
     },
     Help,
+    Languages(ListState),
 }
 
 fn chapter_list(selected: usize) -> Overlay {
@@ -336,6 +337,7 @@ impl Reader<'_> {
                 let title = format!("{} {filter}", t("reader.chapters"));
                 crate::popup(frame, title.trim_end(), items, list);
             }
+            Some(Overlay::Languages(list)) => crate::draw_languages(frame, list),
             Some(Overlay::Help) => {
                 let items = t("reader.help").lines().map(String::from).collect();
                 crate::popup(frame, t("help"), items, &mut ListState::default());
@@ -450,7 +452,7 @@ impl Reader<'_> {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
                     match key.code {
                         KeyCode::Char('c') => return Ok(Some(Exit::Quit)),
-                        KeyCode::Char('l') => i18n::next_language(),
+                        KeyCode::Char('l') => self.toggle_languages(),
                         _ => {}
                     }
                     return Ok(None);
@@ -488,6 +490,12 @@ impl Reader<'_> {
     }
 
     fn handle_overlay(&mut self, code: KeyCode) -> Result<()> {
+        if let Some(Overlay::Languages(list)) = &mut self.overlay {
+            if !crate::pick_language(list, code) {
+                self.toggle_languages();
+            }
+            return Ok(());
+        }
         let Some(Overlay::Chapters { list, filter }) = &mut self.overlay else {
             // Any key closes the help.
             self.overlay = None;
@@ -527,6 +535,15 @@ impl Reader<'_> {
             _ => {}
         }
         Ok(())
+    }
+
+    /// Opens or closes the language list. Closed before a chapter is chosen, it gives the chapter list back.
+    fn toggle_languages(&mut self) {
+        self.overlay = match self.overlay {
+            Some(Overlay::Languages(_)) if self.pages.is_empty() => Some(chapter_list(0)),
+            Some(Overlay::Languages(_)) => None,
+            _ => Some(Overlay::Languages(crate::language_list())),
+        };
     }
 
     /// A chapter number is being typed in the chapter list.

@@ -14,7 +14,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::Result;
 use crate::api::{self, Link};
-use crate::kitty::{self, Geo, Placement};
+use crate::kitty::{self, Geo, Placement, Stored};
 use crate::pages::{self, Image};
 
 /// Tile width in cells. The cover's height follows the thumbnails' 440×248 aspect.
@@ -26,16 +26,11 @@ type Job = (Vec<String>, u32);
 /// A decoded cover: its URL, the width it was decoded at, the image.
 type Cover = (String, u32, Result<Image, String>);
 
-enum Thumb {
-    Ready { id: u32, width: u32, height: u32 },
-    Failed,
-}
-
 pub struct Tiles {
     jobs: Sender<Job>,
     done: Receiver<Cover>,
-    /// Covers already in kitty (or failed), by URL.
-    thumbs: HashMap<String, Thumb>,
+    /// Covers already in kitty by URL; `None` when the download or decoding failed.
+    thumbs: HashMap<String, Option<Stored>>,
     /// Covers of the last job sent.
     asked: Vec<String>,
     /// What kitty shows now.
@@ -73,15 +68,11 @@ impl Tiles {
             if width != self.width || self.thumbs.contains_key(&url) {
                 continue;
             }
-            let thumb = match image {
-                Ok(image) => Thumb::Ready {
-                    id: kitty::transmit(&image)?,
-                    width: image.width,
-                    height: image.height,
-                },
-                Err(_) => Thumb::Failed,
-            };
-            self.thumbs.insert(url, thumb);
+            let stored = image
+                .ok()
+                .map(|image| kitty::transmit(&image))
+                .transpose()?;
+            self.thumbs.insert(url, stored);
         }
         Ok(())
     }
@@ -89,18 +80,11 @@ impl Tiles {
     /// Forgets the covers sent to kitty and frees them there: after a resize (which clears
     /// kitty's images) and when leaving the search. They come back from the RAM cache.
     pub fn reset(&mut self) -> Result<()> {
-        let commands: String = self
-            .thumbs
-            .values()
-            .filter_map(|thumb| match thumb {
-                Thumb::Ready { id, .. } => Some(kitty::free(*id)),
-                Thumb::Failed => None,
-            })
-            .collect();
+        kitty::free(self.thumbs.values().flatten().map(|image| image.id))?;
         self.thumbs.clear();
         self.asked.clear();
         self.shown.clear();
-        kitty::send(&commands)
+        Ok(())
     }
 
     pub fn place(&mut self, placements: Vec<Placement>) -> Result<()> {
@@ -149,16 +133,19 @@ impl Tiles {
             let title_area = Rect::new(x, y + cover_rows, TILE_COLS, 1).intersection(area);
             frame.render_widget(title, title_area);
 
+            // (cover URL, what `thumbs` knows about it)
             match link.cover.as_ref().map(|url| (url, self.thumbs.get(url))) {
-                Some((_, Some(Thumb::Ready { id, width, height }))) => placements.push(Placement {
-                    id: *id,
+                // In kitty: place it.
+                Some((_, Some(Some(image)))) => placements.push(Placement {
+                    id: image.id,
                     x,
                     y,
                     offset: 0,
                     src_y: 0,
-                    src_w: *width,
-                    src_h: (*height).min(u32::from(cover_rows) * geo.cell_h),
+                    src_w: image.width,
+                    src_h: image.height.min(u32::from(cover_rows) * geo.cell_h),
                 }),
+                // Not downloaded yet: ask for it.
                 Some((url, None)) => missing.push(url.clone()),
                 // No cover, or it failed: the name in its place.
                 _ => {

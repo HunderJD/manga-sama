@@ -12,7 +12,7 @@ use ratatui::{DefaultTerminal, Frame};
 use crate::Result;
 use crate::api::Chapter;
 use crate::i18n::{t, tf};
-use crate::kitty::{self, Geo, Placement};
+use crate::kitty::{self, Geo, Placement, Stored};
 use crate::pages::{Loaded, Pages};
 
 /// Pages are at most this wide, like on the site.
@@ -99,7 +99,7 @@ fn ease(pending: i64, dt: Duration) -> i64 {
 enum Page {
     Loading,
     Failed(String),
-    Ready { id: u32, width: u32, height: u32 },
+    Ready(Stored),
 }
 
 enum Overlay {
@@ -205,16 +205,11 @@ impl Reader<'_> {
 
     /// Frees the chapter's images from kitty's memory.
     fn delete_images(&mut self) -> Result<()> {
-        let commands: String = self
-            .pages
-            .iter()
-            .filter_map(|page| match page {
-                Page::Ready { id, .. } => Some(kitty::free(*id)),
-                _ => None,
-            })
-            .collect();
         self.shown.clear();
-        kitty::send(&commands)
+        kitty::free(self.pages.iter().filter_map(|page| match page {
+            Page::Ready(image) => Some(image.id),
+            _ => None,
+        }))
     }
 
     fn receive(&mut self, loaded: Loaded) -> Result<()> {
@@ -225,11 +220,7 @@ impl Reader<'_> {
             return Ok(());
         };
         *slot = match loaded.image {
-            Ok(image) => Page::Ready {
-                id: kitty::transmit(&image)?,
-                width: image.width,
-                height: image.height,
-            },
+            Ok(image) => Page::Ready(kitty::transmit(&image)?),
             Err(e) => Page::Failed(e),
         };
         Ok(())
@@ -324,7 +315,7 @@ impl Reader<'_> {
             .pages
             .iter()
             .map(|page| match page {
-                Page::Ready { height, .. } => *height,
+                Page::Ready(image) => image.height,
                 _ => placeholder,
             })
             .collect();
@@ -347,14 +338,14 @@ impl Reader<'_> {
         for (page, top, height) in visible(&self.heights, self.view, self.pos) {
             let row = (y / geo.cell_h) as u16;
             let text = match &self.pages[page] {
-                Page::Ready { id, width, .. } => {
+                Page::Ready(image) => {
                     placements.push(Placement {
-                        id: *id,
+                        id: image.id,
                         x,
                         y: main.y + row,
                         offset: y % geo.cell_h,
                         src_y: top,
-                        src_w: *width,
+                        src_w: image.width,
                         src_h: height,
                     });
                     None

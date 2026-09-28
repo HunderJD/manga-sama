@@ -47,7 +47,12 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
 
 /// A bordered list in the middle of the screen: versions, chapters, help.
 fn popup(frame: &mut Frame, title: &str, items: Vec<String>, state: &mut ListState) {
-    let width = items.iter().map(|i| i.chars().count()).max().unwrap_or(0) as u16 + 4;
+    let longest = items
+        .iter()
+        .chain([&title.to_string()])
+        .map(|i| i.chars().count())
+        .max();
+    let width = longest.unwrap_or(0) as u16 + 4;
     let height = (items.len() as u16 + 2).min(frame.area().height * 4 / 5);
     let area = frame
         .area()

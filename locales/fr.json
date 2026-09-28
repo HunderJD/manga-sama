@@ -10,7 +10,7 @@
   "reader.chapter": "Chapitre {n}",
   "reader.chapters": "Chapitres",
   "reader.help_title": "Aide",
-  "reader.help": "j k  molette  défiler\nd u           demi-écran\nh l           chapitre précédent / suivant\nF1            liste des chapitres\nF2            masquer la barre\n?             cette aide\n⌫ Échap       retour\nq             quitter",
+  "reader.help": "j k  molette  défiler\nd u           demi-écran\nh l           chapitre précédent / suivant\nF1            liste des chapitres\n0-9         dans la liste : aller au chapitre\nF2            masquer la barre\n?             cette aide\n⌫ Échap       retour\nq             quitter",
   "reader.status": "{title} · Chapitre {chapter}/{chapters} · Page {page}/{pages} · ? aide",
   "reader.end": "Fin du chapitre {n} · l : chapitre suivant",
   "reader.last": "Dernier chapitre.",

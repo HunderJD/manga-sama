@@ -10,7 +10,7 @@
   "reader.chapter": "Chapter {n}",
   "reader.chapters": "Chapters",
   "reader.help_title": "Help",
-  "reader.help": "j k  wheel  scroll\nd u         half screen\nh l         previous / next chapter\nF1          chapter list\nF2          hide the bar\n?           this help\n⌫ Esc       back\nq           quit",
+  "reader.help": "j k  wheel  scroll\nd u         half screen\nh l         previous / next chapter\nF1          chapter list\n0-9         in the list: go to a chapter\nF2          hide the bar\n?           this help\n⌫ Esc       back\nq           quit",
   "reader.status": "{title} · Chapter {chapter}/{chapters} · Page {page}/{pages} · ? help",
   "reader.end": "End of chapter {n} · l: next chapter",
   "reader.last": "Last chapter.",

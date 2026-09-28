@@ -12,8 +12,10 @@ use ratatui::{DefaultTerminal, Frame};
 use crate::Result;
 use crate::api::{self, Chapter, Link};
 
-/// Time without typing before searching, like the site's search bar.
-const DEBOUNCE: Duration = Duration::from_millis(200);
+/// Time without typing before searching.
+const DEBOUNCE: Duration = Duration::from_millis(350);
+/// One letter would list the whole catalogue.
+const MIN_CHARS: usize = 2;
 
 /// A query and its results, from the search thread.
 type Found = (String, Result<Vec<Link>, String>);
@@ -43,12 +45,12 @@ pub struct Search {
 }
 
 impl Search {
-    pub fn new(query: String) -> Self {
+    pub fn new() -> Self {
         let (queries, query_rx) = mpsc::channel();
         let (found_tx, found) = mpsc::channel();
         thread::spawn(move || search(query_rx, found_tx));
         Search {
-            query,
+            query: String::new(),
             typed_at: Instant::now(),
             asked: String::new(),
             cache: HashMap::new(),
@@ -113,7 +115,7 @@ impl Search {
 
     fn ask(&mut self) {
         let query = self.query.trim();
-        if query.is_empty()
+        if query.chars().count() < MIN_CHARS
             || query == self.asked
             || self.cache.contains_key(query)
             || self.typed_at.elapsed() < DEBOUNCE
@@ -247,7 +249,7 @@ impl Search {
         let query = self.query.trim();
         let hint = if !self.status.is_empty() {
             self.status.as_str()
-        } else if !query.is_empty() && !self.cache.contains_key(query) {
+        } else if query.chars().count() >= MIN_CHARS && !self.cache.contains_key(query) {
             "Recherche…"
         } else {
             "↑↓ choisir · Entrée ouvrir · Échap quitter"

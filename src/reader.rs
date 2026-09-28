@@ -1,7 +1,9 @@
-use std::time::Duration;
+use std::io::stdout;
+use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
-use ratatui::crossterm::terminal::window_size;
+use ratatui::crossterm::execute;
+use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate, window_size};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Stylize;
 use ratatui::widgets::{ListState, Paragraph, Wrap};
@@ -19,8 +21,8 @@ const STEP_ROWS: u32 = 3;
 /// After this many scrolls in a chapter, the next chapters are downloaded ahead.
 const PREFETCH_AFTER: u32 = 3;
 const PREFETCH_CHAPTERS: usize = 4;
-/// Share of the remaining scroll done each frame: an ease-out, like CSS `scroll-behavior: smooth`.
-const EASE: f64 = 0.3;
+/// Time constant of the scroll ease-out, like CSS `scroll-behavior: smooth`: 95 % done after 3 of them.
+const GLIDE: Duration = Duration::from_millis(80);
 
 const HELP: [&str; 8] = [
     "j k  molette  défiler",
@@ -120,9 +122,11 @@ fn next_chapters(chapters: &[Chapter], current: usize) -> &[Chapter] {
     &chapters[start..(start + PREFETCH_CHAPTERS).min(chapters.len())]
 }
 
-/// Part of the pending scroll to do this frame: at least 1 px, never past it.
-fn ease(pending: i64) -> i64 {
-    match (pending as f64 * EASE) as i64 {
+/// Part of the pending scroll to do after `dt`: by elapsed time, so the glide is the same at any
+/// frame rate. At least 1 px, never past `pending`.
+fn ease(pending: i64, dt: Duration) -> i64 {
+    let share = 1.0 - (-dt.as_secs_f64() / GLIDE.as_secs_f64()).exp();
+    match (pending as f64 * share).round() as i64 {
         0 => pending.signum(),
         step => step,
     }
@@ -151,6 +155,8 @@ struct Reader<'a> {
     pending: i64,
     /// Scroll actions in this chapter, to start the prefetch.
     scrolls: u32,
+    /// When the previous frame was drawn.
+    frame_at: Instant,
     geo: Geo,
     /// Pixel heights of each page and of the view, from the last frame.
     heights: Vec<u32>,
@@ -178,6 +184,7 @@ pub fn run(
         pos: Pos::default(),
         pending: 0,
         scrolls: 0,
+        frame_at: Instant::now(),
         geo: Geo::now()?,
         heights: Vec::new(),
         view: 0,
@@ -188,7 +195,7 @@ pub fn run(
         last_id: 0,
         shown: Vec::new(),
     };
-    reader.load()?;
+    // Nothing is downloaded until a chapter is chosen in the list.
     let exit = reader.event_loop(terminal);
     reader.delete_images()?;
     exit
@@ -260,12 +267,23 @@ impl Reader<'_> {
             if geo != self.geo {
                 // Resizing clears the screen, which drops kitty's images: send them again at the new width.
                 self.geo = geo;
-                self.load()?;
+                if !self.pages.is_empty() {
+                    self.load()?;
+                }
             }
-            self.animate();
+            let now = Instant::now();
+            // Capped, so that the time spent waiting for a key doesn't turn into a jump.
+            self.animate(
+                now.duration_since(self.frame_at)
+                    .min(Duration::from_millis(16)),
+            );
+            self.frame_at = now;
             let mut placements = Vec::new();
+            // Kitty shows the text and the images of a frame together.
+            execute!(stdout(), BeginSynchronizedUpdate)?;
             terminal.draw(|frame| placements = self.draw(frame))?;
             self.place(placements)?;
+            execute!(stdout(), EndSynchronizedUpdate)?;
             // ~120 fps while scrolling. Drain the whole burst (mouse wheel) before drawing again.
             let mut timeout = Duration::from_millis(if self.pending == 0 { 50 } else { 8 });
             while event::poll(timeout)? {
@@ -277,11 +295,11 @@ impl Reader<'_> {
         }
     }
 
-    fn animate(&mut self) {
+    fn animate(&mut self, dt: Duration) {
         if self.pending == 0 {
             return;
         }
-        let step = ease(self.pending);
+        let step = ease(self.pending, dt);
         let pos = scroll(&self.heights, self.view, self.geo.cell_h, self.pos, step);
         if pos == self.pos {
             // Top or bottom reached.
@@ -337,6 +355,10 @@ impl Reader<'_> {
 
     /// Draws "Chargement…", errors and the end line; returns where the page images go.
     fn draw_pages(&self, frame: &mut Frame, main: Rect) -> Vec<Placement> {
+        if self.pages.is_empty() {
+            // No chapter chosen yet.
+            return Vec::new();
+        }
         let geo = self.geo;
         let cols = geo.page_cols().min(main.width);
         let x = main.x + (main.width - cols) / 2;
@@ -470,7 +492,13 @@ impl Reader<'_> {
                 self.overlay = None;
                 self.open(chapter)?;
             }
-            KeyCode::F(1) | KeyCode::Esc => self.overlay = None,
+            KeyCode::F(1) | KeyCode::Esc => {
+                self.overlay = None;
+                // Closed without choosing: read the current chapter.
+                if self.pages.is_empty() {
+                    self.load()?;
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -524,10 +552,12 @@ mod tests {
 
     #[test]
     fn easing() {
-        assert_eq!(ease(60), 18);
-        assert_eq!(ease(-60), -18);
-        assert_eq!(ease(3), 1);
-        assert_eq!(ease(-1), -1);
+        // After one time constant: 1 - e^-1 of the way.
+        assert_eq!(ease(100, GLIDE), 63);
+        assert_eq!(ease(-100, GLIDE), -63);
+        assert_eq!(ease(3, Duration::from_millis(1)), 1);
+        assert_eq!(ease(-1, Duration::from_millis(1)), -1);
+        assert_eq!(ease(100, Duration::from_secs(10)), 100);
     }
 
     #[test]

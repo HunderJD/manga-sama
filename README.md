@@ -14,8 +14,23 @@ Search a title, pick a chapter, and scroll through the pages like on the website
 
 ## What you need
 
-- [kitty](https://sw.kovidgoyal.net/kitty/). Pages are drawn with its graphics protocol, so other terminals won't show them.
+- [kitty](https://sw.kovidgoyal.net/kitty/). Pages are drawn with its graphics protocol, see [Terminals](#terminals).
 - Rust, to build it.
+
+## Terminals
+
+manga-sama draws pages with the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
+Other terminals that implement it may work, but only kitty has been tested.
+
+| Terminal                              | Status                                    |
+|---------------------------------------|-------------------------------------------|
+| kitty                                 | ✅ supported                              |
+| Ghostty                               | ❔ not tested, implements the protocol     |
+| WezTerm, Konsole                      | ❔ not tested, partial support             |
+| Alacritty, foot, GNOME Terminal, xterm | ❌ no kitty graphics protocol             |
+| tmux, over SSH                        | ❌ images don't get through               |
+
+Tried another one? Open an issue and tell us how it went.
 
 ## Install
 

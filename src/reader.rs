@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{
@@ -9,18 +10,23 @@ use ratatui::widgets::{ListState, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::Result;
-use crate::api::Chapter;
 use crate::i18n::{t, tf};
 use crate::kitty::{self, Geo, Placement, Stored};
 use crate::pages::{Loaded, Pages};
+use crate::search::Opened;
+use crate::source::{Chapter, Source};
 
 /// Pages are at most this wide, like on the site.
 const MAX_WIDTH_PX: u32 = 900;
 /// Rows scrolled by j/k and by one mouse wheel notch.
 const STEP_ROWS: u32 = 3;
-/// After this many scrolls in a chapter, the next chapters are downloaded ahead.
+/// After this many scrolls in a chapter, the chapters after the next one are downloaded ahead
+/// (the next one is already loaded whole, see `prepare_next`).
 const PREFETCH_AFTER: u32 = 3;
 const PREFETCH_CHAPTERS: usize = 4;
+/// Kitty keeps 320 MB of images and silently drops the oldest beyond: the chapters kept around the
+/// current one must stay under this (counted as sent, 3 bytes per pixel).
+const KITTY_BUDGET: u64 = 256 * 1024 * 1024;
 /// Time constant of the scroll ease-out, like CSS `scroll-behavior: smooth`: 95 % done after 3 of them.
 const GLIDE: Duration = Duration::from_millis(80);
 
@@ -81,9 +87,9 @@ fn visible(heights: &[u32], view: u32, pos: Pos) -> Vec<(usize, u32, u32)> {
     slices
 }
 
-/// The chapters to download ahead while reading chapter `current`.
+/// The chapters to download ahead while reading chapter `current`: the ones after the next.
 fn next_chapters(chapters: &[Chapter], current: usize) -> &[Chapter] {
-    let start = (current + 1).min(chapters.len());
+    let start = (current + 2).min(chapters.len());
     &chapters[start..(start + PREFETCH_CHAPTERS).min(chapters.len())]
 }
 
@@ -102,6 +108,50 @@ enum Page {
     Loading,
     Failed(String),
     Ready(Stored),
+}
+
+/// Some pages are still on their way.
+fn loading(pages: &[Page]) -> bool {
+    pages.iter().any(|page| matches!(page, Page::Loading))
+}
+
+/// What these pages' images weigh in kitty.
+fn stored_bytes(pages: &[Page]) -> u64 {
+    let size = |page: &Page| match page {
+        Page::Ready(image) => u64::from(image.width) * u64::from(image.height) * 3,
+        _ => 0,
+    };
+    pages.iter().map(size).sum()
+}
+
+/// Deletes these pages' images from kitty.
+fn free_pages(pages: &[Page]) -> Result<()> {
+    kitty::free(pages.iter().filter_map(|page| match page {
+        Page::Ready(image) => Some(image.id),
+        _ => None,
+    }))
+}
+
+/// The kept chapters to let go when opening `chapter` (`opened` bytes): the ones that aren't next
+/// to it, and all of them when, with it, they weigh more than kitty's budget (long strips of huge
+/// pages). `kept`: (chapter index, bytes in kitty).
+fn to_drop(kept: &[(usize, u64)], chapter: usize, opened: u64) -> Vec<usize> {
+    let near = |index: usize| index.abs_diff(chapter) <= 1;
+    let weight: u64 = kept
+        .iter()
+        .filter(|(index, _)| near(*index))
+        .map(|(_, size)| size)
+        .sum();
+    let heavy = weight + opened > KITTY_BUDGET;
+    let dropped = kept.iter().filter(|(index, _)| heavy || !near(*index));
+    dropped.map(|(index, _)| *index).collect()
+}
+
+/// The pages of a chapter next to the current one, kept in kitty so that going there is instant,
+/// with the job that loads them.
+struct Held {
+    job: u64,
+    pages: Vec<Page>,
 }
 
 enum Overlay {
@@ -124,7 +174,7 @@ fn chapter_list(selected: usize) -> Overlay {
 
 /// Indexes of the chapters whose number starts with `filter`.
 fn matching(chapters: &[Chapter], filter: &str) -> Vec<usize> {
-    let starts = |c: &Chapter| c.number.to_string().starts_with(filter);
+    let starts = |c: &Chapter| c.label.starts_with(filter);
     (0..chapters.len())
         .filter(|&i| starts(&chapters[i]))
         .collect()
@@ -132,11 +182,16 @@ fn matching(chapters: &[Chapter], filter: &str) -> Vec<usize> {
 
 struct Reader<'a> {
     io: &'a mut Pages,
+    source: Source,
     title: String,
     chapters: Vec<Chapter>,
     chapter: usize,
     job: u64,
+    /// The current chapter's pages: one placeholder until their count is known, none before a
+    /// chapter is chosen.
     pages: Vec<Page>,
+    /// The previous and next chapters, by index, when they were loaded.
+    kept: HashMap<usize, Held>,
     pos: Pos,
     /// Pixels still to scroll, done a bit each frame.
     pending: i64,
@@ -151,19 +206,17 @@ struct Reader<'a> {
     overlay: Option<Overlay>,
 }
 
-pub fn run(
-    terminal: &mut DefaultTerminal,
-    io: &mut Pages,
-    title: String,
-    chapters: Vec<Chapter>,
-) -> Result<Exit> {
+pub fn run(terminal: &mut DefaultTerminal, io: &mut Pages, opened: Opened) -> Result<Exit> {
+    let (source, title, chapters) = opened;
     let mut reader = Reader {
         io,
+        source,
         title,
         chapters,
         chapter: 0,
         job: 0,
         pages: Vec::new(),
+        kept: HashMap::new(),
         pos: Pos::default(),
         pending: 0,
         scrolls: 0,
@@ -181,44 +234,123 @@ pub fn run(
 }
 
 impl Reader<'_> {
+    /// Goes to `chapter`. Kitty keeps the images of the chapters on each side of it, and only those.
     fn open(&mut self, chapter: usize) -> Result<()> {
+        if !self.pages.is_empty() {
+            let pages = std::mem::take(&mut self.pages);
+            self.kept.insert(
+                self.chapter,
+                Held {
+                    job: self.job,
+                    pages,
+                },
+            );
+        }
         self.chapter = chapter;
         self.pos = Pos::default();
         self.pending = 0;
         self.scrolls = 0;
-        self.load()
-    }
-
-    /// (Re)loads the pages of the current chapter at the current width, from the visible page on.
-    fn load(&mut self) -> Result<()> {
-        self.delete_images()?;
-        let chapter = self.chapters[self.chapter];
-        self.pages = (0..chapter.pages).map(|_| Page::Loading).collect();
-        let start = (self.pos.page as u32 + 1).min(chapter.pages);
-        self.job = self
-            .io
-            .request(&self.title, chapter, start, self.geo.page_px());
+        let opened = self.kept.remove(&chapter);
+        let sizes: Vec<(usize, u64)> = self
+            .kept
+            .iter()
+            .map(|(index, held)| (*index, stored_bytes(&held.pages)))
+            .collect();
+        let opened_size = opened.as_ref().map_or(0, |held| stored_bytes(&held.pages));
+        let dropped = to_drop(&sizes, chapter, opened_size);
+        for index in dropped {
+            if let Some(held) = self.kept.remove(&index) {
+                free_pages(&held.pages)?;
+            }
+        }
+        match opened {
+            Some(held) => {
+                self.job = held.job;
+                self.pages = held.pages;
+                // Half loaded, and the worker has moved on to another chapter since: ask again.
+                if loading(&self.pages) && !self.io.is_current(self.job) {
+                    self.load();
+                }
+            }
+            None => self.load(),
+        }
         Ok(())
     }
 
-    fn delete_images(&mut self) -> Result<()> {
-        kitty::free(self.pages.iter().filter_map(|page| match page {
-            Page::Ready(image) => Some(image.id),
-            _ => None,
-        }))
+    /// Asks for the current chapter's pages at the current width, from the visible page on.
+    fn load(&mut self) {
+        if self.pages.is_empty() {
+            // One placeholder until the worker tells how many pages there are.
+            self.pages.push(Page::Loading);
+        }
+        let chapter = &self.chapters[self.chapter];
+        let width = self.geo.page_px();
+        self.job = self.io.request(self.source, chapter, self.pos.page, width);
     }
 
-    fn receive(&mut self, loaded: Loaded) -> Result<()> {
-        if loaded.job != self.job {
-            return Ok(());
+    /// Once the current chapter is fully loaded, loads the next one as well: `l` then shows it at once.
+    fn prepare_next(&mut self) {
+        let next = self.chapter + 1;
+        if self.pages.is_empty()
+            || loading(&self.pages)
+            || next >= self.chapters.len()
+            || self.kept.contains_key(&next)
+        {
+            return;
         }
-        let Some(slot) = self.pages.get_mut(loaded.page as usize - 1) else {
+        // Only if a chapter like this one still fits in kitty next to what's there.
+        let kept: u64 = self
+            .kept
+            .values()
+            .map(|held| stored_bytes(&held.pages))
+            .sum();
+        if kept + 2 * stored_bytes(&self.pages) > KITTY_BUDGET {
+            return;
+        }
+        let width = self.geo.page_px();
+        let job = self.io.request(self.source, &self.chapters[next], 0, width);
+        let pages = vec![Page::Loading];
+        self.kept.insert(next, Held { job, pages });
+    }
+
+    /// Frees every image the reader put in kitty: the current chapter's and the kept ones.
+    fn delete_images(&mut self) -> Result<()> {
+        free_pages(&self.pages)?;
+        for (_, held) in self.kept.drain() {
+            free_pages(&held.pages)?;
+        }
+        Ok(())
+    }
+
+    /// Stores what the worker sent in the current chapter or in a kept one; images go to kitty.
+    fn receive(&mut self, loaded: Loaded) -> Result<()> {
+        let (Loaded::Count { job, .. } | Loaded::Page { job, .. }) = &loaded;
+        let job = *job;
+        let pages = if job == self.job {
+            &mut self.pages
+        } else if let Some(held) = self.kept.values_mut().find(|held| held.job == job) {
+            &mut held.pages
+        } else {
             return Ok(());
         };
-        *slot = match loaded.image {
-            Ok(image) => Page::Ready(kitty::transmit(&image)?),
-            Err(e) => Page::Failed(e),
-        };
+        match loaded {
+            // A kept chapter asked again already has its pages: keep the ones that are ready.
+            Loaded::Count {
+                pages: Ok(count), ..
+            } if pages.len() != count => *pages = (0..count).map(|_| Page::Loading).collect(),
+            Loaded::Count { pages: Err(e), .. } => *pages = vec![Page::Failed(e)],
+            Loaded::Count { .. } => {}
+            Loaded::Page { page, image, .. } => {
+                if let Some(slot) = pages.get_mut(page)
+                    && matches!(slot, Page::Loading)
+                {
+                    *slot = match image {
+                        Ok(image) => Page::Ready(kitty::transmit(&image)?),
+                        Err(e) => Page::Failed(e),
+                    };
+                }
+            }
+        }
         Ok(())
     }
 
@@ -229,12 +361,15 @@ impl Reader<'_> {
             while let Ok(loaded) = self.io.done.try_recv() {
                 self.receive(loaded)?;
             }
+            self.prepare_next();
             let geo = Geo::now()?;
             if geo != self.geo {
                 // Resizing clears the screen, which drops kitty's images: send them again at the new width.
                 self.geo = geo;
                 if !self.pages.is_empty() {
-                    self.load()?;
+                    self.delete_images()?;
+                    self.pages.clear();
+                    self.load();
                 }
             }
             let now = Instant::now();
@@ -286,7 +421,7 @@ impl Reader<'_> {
             Some(Overlay::Chapters { list, filter }) => {
                 let items = matching(&self.chapters, filter)
                     .into_iter()
-                    .map(|i| tf("reader.chapter", &[("n", &self.chapters[i].number)]))
+                    .map(|i| tf("reader.chapter", &[("n", &self.chapters[i].label)]))
                     .collect();
                 let title = format!("{} {filter}", t("reader.chapters"));
                 crate::popup(frame, title.trim_end(), items, list);
@@ -365,7 +500,7 @@ impl Reader<'_> {
         let end_row = y.div_ceil(geo.cell_h) as u16;
         if end_row < main.height {
             let end = match self.chapters.get(self.chapter + 1) {
-                Some(_) => tf("reader.end", &[("n", &self.chapters[self.chapter].number)]),
+                Some(_) => tf("reader.end", &[("n", &self.chapters[self.chapter].label)]),
                 None => t("reader.last").to_string(),
             };
             let line = Rect::new(main.x, main.y + end_row, main.width, 1);
@@ -375,15 +510,14 @@ impl Reader<'_> {
     }
 
     fn draw_bar(&self, frame: &mut Frame, area: Rect) {
-        let chapter = self.chapters[self.chapter];
         let status = tf(
             "reader.status",
             &[
-                ("title", &self.title.trim()),
-                ("chapter", &chapter.number),
+                ("title", &self.title),
+                ("chapter", &self.chapters[self.chapter].label),
                 ("chapters", &self.chapters.len()),
                 ("page", &(self.pos.page + 1)),
-                ("pages", &chapter.pages),
+                ("pages", &self.pages.len()),
             ],
         );
         frame.render_widget(Paragraph::new(status).reversed(), area);
@@ -479,7 +613,7 @@ impl Reader<'_> {
                 self.overlay = None;
                 // Closed without choosing: read the current chapter.
                 if self.pages.is_empty() {
-                    self.load()?;
+                    self.load();
                 }
             }
             _ => {}
@@ -505,8 +639,8 @@ impl Reader<'_> {
         self.pending += delta;
         self.scrolls += 1;
         if self.scrolls == PREFETCH_AFTER {
-            let next = next_chapters(&self.chapters, self.chapter);
-            self.io.prefetch(&self.title, next);
+            let ahead = next_chapters(&self.chapters, self.chapter);
+            self.io.prefetch(self.source, ahead);
         }
     }
 }
@@ -557,23 +691,45 @@ mod tests {
         assert_eq!(ease(100, Duration::from_secs(10)), 100);
     }
 
+    fn chapters(labels: &[&str]) -> Vec<Chapter> {
+        let chapter = |label: &&str| Chapter {
+            id: format!("/{label}"),
+            label: label.to_string(),
+        };
+        labels.iter().map(chapter).collect()
+    }
+
     #[test]
     fn prefetched_chapters() {
-        let chapters: Vec<_> = (1..=6).map(|number| Chapter { number, pages: 1 }).collect();
-        let numbers = |current| {
-            let next = next_chapters(&chapters, current);
-            next.iter().map(|c| c.number).collect::<Vec<_>>()
+        let chapters = chapters(&["1", "2", "3", "4", "5", "6", "7"]);
+        let labels = |current| {
+            let ahead = next_chapters(&chapters, current);
+            ahead.iter().map(|c| c.label.as_str()).collect::<Vec<_>>()
         };
-        assert_eq!(numbers(0), [2, 3, 4, 5]);
-        assert_eq!(numbers(4), [6]);
-        assert!(numbers(5).is_empty());
+        // The next one is loaded whole instead: the prefetch starts after it.
+        assert_eq!(labels(0), ["3", "4", "5", "6"]);
+        assert_eq!(labels(4), ["7"]);
+        assert!(labels(5).is_empty());
+    }
+
+    #[test]
+    fn chapters_kept_in_kitty() {
+        const MB: u64 = 1024 * 1024;
+        let mut dropped = to_drop(&[(3, 50 * MB), (5, 50 * MB), (8, MB)], 4, 50 * MB);
+        dropped.sort();
+        // Opening 4: 3 and 5 stay, 8 is too far.
+        assert_eq!(dropped, [8]);
+        // Too heavy together: nothing stays around.
+        let mut dropped = to_drop(&[(3, 200 * MB), (5, MB)], 4, 100 * MB);
+        dropped.sort();
+        assert_eq!(dropped, [3, 5]);
     }
 
     #[test]
     fn chapter_filter() {
-        let chapters = [1, 2, 12, 21, 120].map(|number| Chapter { number, pages: 1 });
-        assert_eq!(matching(&chapters, ""), [0, 1, 2, 3, 4]);
-        assert_eq!(matching(&chapters, "12"), [2, 4]);
+        let chapters = chapters(&["1", "2", "12", "21", "120", "12.5"]);
+        assert_eq!(matching(&chapters, ""), [0, 1, 2, 3, 4, 5]);
+        assert_eq!(matching(&chapters, "12"), [2, 4, 5]);
         assert!(matching(&chapters, "9").is_empty());
     }
 

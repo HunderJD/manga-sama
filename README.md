@@ -1,6 +1,6 @@
 # manga-sama
 
-Read [Anime-Sama](https://anime-sama.to) scans in your terminal.
+Read [Anime-Sama](https://anime-sama.to) and [Mangas-Origines](https://mangas-origines.fr) scans in your terminal.
 Search a title, pick a chapter, and scroll through the pages like on the website.
 
 🇫🇷 [Version française](README.fr.md)
@@ -14,8 +14,23 @@ Search a title, pick a chapter, and scroll through the pages like on the website
 
 ## What you need
 
-- [kitty](https://sw.kovidgoyal.net/kitty/). Pages are drawn with its graphics protocol, so other terminals won't show them.
+- [kitty](https://sw.kovidgoyal.net/kitty/). Pages are drawn with its graphics protocol, see [Terminals](#terminals).
 - Rust, to build it.
+
+## Terminals
+
+manga-sama draws pages with the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
+Other terminals that implement it may work, but only kitty has been tested.
+
+| Terminal                              | Status                                    |
+|---------------------------------------|-------------------------------------------|
+| kitty                                 | ✅ supported                              |
+| Ghostty                               | ❔ not tested, implements the protocol     |
+| WezTerm, Konsole                      | ❔ not tested, partial support             |
+| Alacritty, foot, GNOME Terminal, xterm | ❌ no kitty graphics protocol             |
+| tmux, over SSH                        | ❌ images don't get through               |
+
+Tried another one? Open an issue and tell us how it went.
 
 ## Install
 
@@ -40,6 +55,7 @@ The reader opens on the chapter list.
 |----------|------------------|
 | arrows   | move             |
 | `Enter`  | open             |
+| `Tab`    | source           |
 | `Ctrl+T` | cover tiles      |
 | `Ctrl+L` | language         |
 | `?`      | help             |

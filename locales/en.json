@@ -3,7 +3,7 @@
   "loading": "Loading…",
   "search.title": "Search",
   "search.searching": "Searching…",
-  "search.hint": "? help",
+  "search.hint": "? help · Tab: {source}",
   "search.no_results": "No results.",
   "search.no_scans": "No scans for this title.",
   "search.version": "Version",
@@ -14,11 +14,12 @@
   "reader.end": "End of chapter {n} · l: next chapter",
   "reader.last": "Last chapter.",
   "reader.no_pixels": "the terminal does not report its size in pixels: run manga-sama in kitty",
-  "api.no_title": "title not found on {url}",
-  "api.bad_chapters": "invalid chapter list: {json}",
   "pages.bad_image": "unreadable image: {e}",
   "help": "Help",
-  "search.help": "arrows  select\nEnter   open\nCtrl+T  tiles\nCtrl+L  languages\n?       this help\nEsc     quit",
+  "search.help": "arrows  select\nEnter   open\nTab     source\nCtrl+T  tiles\nCtrl+L  languages\n?       this help\nEsc     quit",
   "language": "English",
-  "languages": "Languages"
+  "languages": "Languages",
+  "source.no_title": "title not found on {url}",
+  "source.bad_chapters": "invalid chapter list: {json}",
+  "source.no_pages": "no pages found on {url}"
 }

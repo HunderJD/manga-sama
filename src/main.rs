@@ -1,9 +1,12 @@
-mod api;
+mod anime_sama;
+mod http;
 mod i18n;
 mod kitty;
+mod mangas_origines;
 mod pages;
 mod reader;
 mod search;
+mod source;
 mod tiles;
 
 use std::io::stdout;
@@ -38,8 +41,8 @@ fn main() {
 fn run(terminal: &mut DefaultTerminal) -> Result<()> {
     let mut search = search::Search::new();
     let mut pages = pages::Pages::spawn();
-    while let Some((title, chapters)) = search.run(terminal)? {
-        if reader::run(terminal, &mut pages, title, chapters)? == reader::Exit::Quit {
+    while let Some(opened) = search.run(terminal)? {
+        if reader::run(terminal, &mut pages, opened)? == reader::Exit::Quit {
             break;
         }
     }

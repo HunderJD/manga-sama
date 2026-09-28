@@ -5,114 +5,65 @@
 //! (`get_nb_chap_et_img.php`) is JSON, and pages are plain image files.
 
 use std::collections::BTreeMap;
-use std::io::IsTerminal;
-use std::sync::LazyLock;
-use std::time::{Duration, Instant};
 
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use scraper::{Html, Selector};
 
 use crate::Result;
+use crate::http::{self, encode};
 use crate::i18n::tf;
+use crate::source::{Chapter, Version, Work};
 
 const BASE: &str = "https://anime-sama.to";
 
-static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
-    ureq::Agent::config_builder()
-        .user_agent(concat!("manga-sama/", env!("CARGO_PKG_VERSION")))
-        // Long enough for a 3.6 MB page on a slow connection.
-        .timeout_global(Some(Duration::from_secs(60)))
-        .build()
-        .into()
-});
-
-/// A search result (`path` = slug) or a scan version (`path` = "scan/vf").
-pub struct Link {
-    pub name: String,
-    pub path: String,
-    /// Thumbnail URL, for search results.
-    pub cover: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Chapter {
-    pub number: u32,
-    pub pages: u32,
-}
-
-static START: LazyLock<Instant> = LazyLock::new(Instant::now);
-
-/// One line per request on stderr, only when it is redirected (`manga-sama 2> log`): the TUI owns the terminal.
-fn log(line: &str) {
-    if !std::io::stderr().is_terminal() {
-        eprintln!("{:8.3}s {line}", START.elapsed().as_secs_f64());
-    }
-}
-
-fn get(url: &str) -> Result<ureq::Body> {
-    let sent = Instant::now();
-    let response = AGENT.get(url).call();
-    let ms = sent.elapsed().as_millis();
-    match &response {
-        Ok(response) => log(&format!("{} {ms:>4} ms {url}", response.status().as_u16())),
-        Err(e) => log(&format!("ERR {ms:>4} ms {url} : {e}")),
-    }
-    Ok(response.map_err(|e| format!("{url} : {e}"))?.into_body())
-}
-
-fn encode(s: &str) -> String {
-    utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
-}
-
-pub fn search(query: &str) -> Result<Vec<Link>> {
+/// A work's id is its slug, from `/catalogue/<slug>/`.
+pub fn search(query: &str) -> Result<Vec<Work>> {
     let url = format!(
         "{BASE}/catalogue/?search={}&type%5B%5D=Scans",
         encode(query)
     );
-    Ok(parse_search(&get(&url)?.read_to_string()?))
+    Ok(parse_search(&http::text(&url)?))
 }
 
-pub fn versions(slug: &str) -> Result<Vec<Link>> {
-    let url = format!("{BASE}/catalogue/{slug}/");
-    Ok(parse_versions(&get(&url)?.read_to_string()?))
+/// A version's id is its path under the work, like `scan/vf`.
+pub fn versions(work: &str) -> Result<Vec<Version>> {
+    let url = format!("{BASE}/catalogue/{work}/");
+    Ok(parse_versions(&http::text(&url)?))
 }
 
-/// The work's name as the chapter API expects it.
-pub fn title(slug: &str, path: &str) -> Result<String> {
-    let url = format!("{BASE}/catalogue/{slug}/{path}/");
-    parse_title(&get(&url)?.read_to_string()?)
-        .ok_or_else(|| tf("api.no_title", &[("url", &url)]).into())
-}
-
-pub fn chapters(title: &str) -> Result<Vec<Chapter>> {
+/// The chapter list is JSON, asked for with the work's exact title, read on the version's page.
+/// A chapter's id is the folder of its images with their count, `…/s2/scans/<title>/<n>?pages=<count>`,
+/// so that `pages` needs no request.
+pub fn chapters(work: &str, version: &str) -> Result<Vec<Chapter>> {
+    let url = format!("{BASE}/catalogue/{work}/{version}/");
+    let title =
+        parse_title(&http::text(&url)?).ok_or_else(|| tf("source.no_title", &[("url", &url)]))?;
     let url = format!(
         "{BASE}/s2/scans/get_nb_chap_et_img.php?oeuvre={}",
-        encode(title)
+        encode(&title)
     );
-    parse_chapters(&get(&url)?.read_to_string()?)
+    let folder = format!("{BASE}/s2/scans/{}", encode(&title));
+    let chapters = parse_chapters(&http::text(&url)?)?
+        .into_iter()
+        .map(|(number, pages)| Chapter {
+            id: format!("{folder}/{number}?pages={pages}"),
+            label: number.to_string(),
+        })
+        .collect();
+    Ok(chapters)
 }
 
-/// A search result's thumbnail. They live on jsdelivr (Anime-Sama's image repository), not on the site.
-pub fn cover(url: &str) -> Result<Vec<u8>> {
-    bytes(url)
+pub fn pages(chapter: &Chapter) -> Result<Vec<String>> {
+    let (folder, count) = chapter
+        .id
+        .split_once("?pages=")
+        .ok_or("not an Anime-Sama chapter")?;
+    let count: u32 = count.parse()?;
+    Ok((1..=count)
+        .map(|page| format!("{folder}/{page}.jpg"))
+        .collect())
 }
 
-pub fn page(title: &str, chapter: u32, page: u32) -> Result<Vec<u8>> {
-    let url = format!("{BASE}/s2/scans/{}/{chapter}/{page}.jpg", encode(title));
-    bytes(&url)
-}
-
-/// Some pages weigh more than the 10 MB ureq accepts by default.
-const MAX_IMAGE: u64 = 100 * 1024 * 1024;
-
-fn bytes(url: &str) -> Result<Vec<u8>> {
-    Ok(get(url)?
-        .into_with_config()
-        .limit(MAX_IMAGE)
-        .read_to_vec()?)
-}
-
-fn parse_search(html: &str) -> Vec<Link> {
+fn parse_search(html: &str) -> Vec<Work> {
     let doc = Html::parse_document(html);
     let link = Selector::parse(r#".catalog-card a[href*="/catalogue/"]"#).unwrap();
     let name = Selector::parse(".card-title").unwrap();
@@ -126,9 +77,9 @@ fn parse_search(html: &str) -> Vec<Link> {
                 .trim_end_matches('/');
             let name = a.select(&name).next()?.text().collect::<String>();
             let cover = a.select(&cover).next().and_then(|img| img.attr("src"));
-            (!slug.is_empty()).then(|| Link {
+            (!slug.is_empty()).then(|| Work {
+                id: slug.to_string(),
                 name: name.trim().to_string(),
-                path: slug.to_string(),
                 cover: cover.map(String::from),
             })
         })
@@ -136,20 +87,19 @@ fn parse_search(html: &str) -> Vec<Link> {
 }
 
 /// Reads the `panneauScan("name", "path");` calls of a work's page.
-fn parse_versions(html: &str) -> Vec<Link> {
+fn parse_versions(html: &str) -> Vec<Version> {
     html.split("panneauScan(\"")
         .skip(1)
         .filter_map(|call| {
             let (name, rest) = call.split_once('"')?;
             let (_, rest) = rest.split_once('"')?;
             let (path, _) = rest.split_once('"')?;
-            Some(Link {
+            Some(Version {
+                id: path.to_string(),
                 name: name.to_string(),
-                path: path.to_string(),
-                cover: None,
             })
         })
-        .filter(|v| (v.name.as_str(), v.path.as_str()) != ("nom", "url"))
+        .filter(|v| (v.name.as_str(), v.id.as_str()) != ("nom", "url"))
         .collect()
 }
 
@@ -161,18 +111,17 @@ fn parse_title(html: &str) -> Option<String> {
     doc.select(&title).next().map(|e| e.inner_html())
 }
 
-/// Empty chapters are dropped: the reader could never show them.
-fn parse_chapters(json: &str) -> Result<Vec<Chapter>> {
+/// The chapters' numbers and page counts. Empty chapters are dropped: the reader could never show them.
+fn parse_chapters(json: &str) -> Result<Vec<(u32, u32)>> {
     // An unknown work gets `{"error": "..."}` instead of a chapter map: it parses as empty
     // and ends in the error below, with the site's answer in it.
     let chapters: Vec<_> = serde_json::from_str::<BTreeMap<u32, u32>>(json)
         .unwrap_or_default()
         .into_iter()
         .filter(|&(_, pages)| pages > 0)
-        .map(|(number, pages)| Chapter { number, pages })
         .collect();
     if chapters.is_empty() {
-        return Err(tf("api.bad_chapters", &[("json", &json)]).into());
+        return Err(tf("source.bad_chapters", &[("json", &json)]).into());
     }
     Ok(chapters)
 }
@@ -193,7 +142,7 @@ mod tests {
         let works = parse_search(html);
         let got: Vec<_> = works
             .iter()
-            .map(|w| (w.name.as_str(), w.path.as_str(), w.cover.as_deref()))
+            .map(|w| (w.name.as_str(), w.id.as_str(), w.cover.as_deref()))
             .collect();
         let berserk = (
             "Berserk",
@@ -214,7 +163,7 @@ mod tests {
         let versions = parse_versions(html);
         let got: Vec<_> = versions
             .iter()
-            .map(|v| (v.name.as_str(), v.path.as_str()))
+            .map(|v| (v.name.as_str(), v.id.as_str()))
             .collect();
         assert_eq!(
             got,
@@ -235,17 +184,26 @@ mod tests {
     #[test]
     fn chapter_list() {
         let chapters = parse_chapters(r#"{"1":57,"2":25,"10":3}"#).unwrap();
-        let expected = [(1, 57), (2, 25), (10, 3)].map(|(number, pages)| Chapter { number, pages });
-        assert_eq!(chapters, expected);
-        assert_eq!(
-            parse_chapters(r#"{"1":5,"2":0}"#).unwrap(),
-            [Chapter {
-                number: 1,
-                pages: 5
-            }]
-        );
+        assert_eq!(chapters, [(1, 57), (2, 25), (10, 3)]);
+        assert_eq!(parse_chapters(r#"{"1":5,"2":0}"#).unwrap(), [(1, 5)]);
         assert!(parse_chapters(r#"{"error":"Oeuvre 'x' not found"}"#).is_err());
         assert!(parse_chapters("{}").is_err());
+    }
+
+    #[test]
+    fn page_urls() {
+        let chapter = Chapter {
+            id: format!("{BASE}/s2/scans/Berserk/1?pages=2"),
+            label: "1".into(),
+        };
+        let urls = pages(&chapter).unwrap();
+        assert_eq!(
+            urls,
+            [
+                format!("{BASE}/s2/scans/Berserk/1/1.jpg"),
+                format!("{BASE}/s2/scans/Berserk/1/2.jpg")
+            ]
+        );
     }
 
     #[test]
@@ -254,18 +212,18 @@ mod tests {
         let work = search("berserk")
             .unwrap()
             .into_iter()
-            .find(|w| w.path == "berserk")
+            .find(|w| w.id == "berserk")
             .expect("berserk trouvé");
-        let thumbnail = cover(work.cover.as_deref().expect("a cover")).unwrap();
+        let thumbnail = http::bytes(work.cover.as_deref().expect("a cover")).unwrap();
         image::load_from_memory(&thumbnail).unwrap();
-        let version = versions(&work.path)
+        let version = versions(&work.id)
             .unwrap()
             .into_iter()
             .next()
             .expect("une version");
-        let title = title(&work.path, &version.path).unwrap();
-        let chapters = chapters(&title).unwrap();
-        let bytes = page(&title, chapters[0].number, 1).unwrap();
+        let chapters = chapters(&work.id, &version.id).unwrap();
+        let urls = pages(&chapters[0]).unwrap();
+        let bytes = http::bytes(&urls[0]).unwrap();
         image::load_from_memory(&bytes).unwrap();
     }
 }

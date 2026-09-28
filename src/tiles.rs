@@ -13,9 +13,10 @@ use ratatui::style::Stylize;
 use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::Result;
-use crate::api::{self, Link};
+use crate::http;
 use crate::kitty::{self, Geo, Placement, Stored};
 use crate::pages::{self, Image};
+use crate::source::Work;
 
 /// Tile width in cells, a look choice: smaller means more covers per row but shorter titles.
 const TILE_COLS: u16 = 18;
@@ -88,7 +89,7 @@ impl Tiles {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        links: &[Link],
+        works: &[Work],
         selected: usize,
         geo: Geo,
     ) -> Vec<Placement> {
@@ -108,15 +109,15 @@ impl Tiles {
         }
 
         let first = self.top * self.columns;
-        let last = (first + rows * self.columns).min(links.len());
+        let last = (first + rows * self.columns).min(works.len());
         let mut placements = Vec::new();
         let mut missing = Vec::new();
-        for (index, link) in links.iter().enumerate().take(last).skip(first) {
+        for (index, work) in works.iter().enumerate().take(last).skip(first) {
             let n = index - first;
             let x = area.x + (n % self.columns) as u16 * (TILE_COLS + GAP);
             let y = area.y + (n / self.columns) as u16 * (tile_rows + GAP);
 
-            let title: String = link.name.chars().take(usize::from(TILE_COLS)).collect();
+            let title: String = work.name.chars().take(usize::from(TILE_COLS)).collect();
             let title = match index == selected {
                 true => Paragraph::new(title).reversed(),
                 false => Paragraph::new(title),
@@ -125,7 +126,7 @@ impl Tiles {
             frame.render_widget(title, title_area);
 
             // (cover URL, what `thumbs` knows about it)
-            match link.cover.as_ref().map(|url| (url, self.thumbs.get(url))) {
+            match work.cover.as_ref().map(|url| (url, self.thumbs.get(url))) {
                 // In kitty: place it.
                 Some((_, Some(Some(image)))) => placements.push(Placement {
                     id: image.id,
@@ -140,7 +141,7 @@ impl Tiles {
                 Some((url, None)) => missing.push(url.clone()),
                 // No cover, or it failed: the name in its place.
                 _ => {
-                    let name = Paragraph::new(link.name.as_str()).wrap(Wrap { trim: true });
+                    let name = Paragraph::new(work.name.as_str()).wrap(Wrap { trim: true });
                     let cover_area = Rect::new(x, y, TILE_COLS, cover_rows).intersection(area);
                     frame.render_widget(name.dim(), cover_area);
                 }
@@ -199,7 +200,7 @@ fn fetch(jobs: Receiver<Job>, done: Sender<Cover>) -> Option<()> {
         };
         let bytes = match cache.entry(url.clone()) {
             Entry::Occupied(entry) => Ok(entry.into_mut()),
-            Entry::Vacant(entry) => api::cover(&url)
+            Entry::Vacant(entry) => http::bytes(&url)
                 .map(|bytes| entry.insert(bytes))
                 .map_err(|e| e.to_string()),
         };

@@ -1,6 +1,6 @@
 # manga-sama
 
-Lis les scans d'[Anime-Sama](https://anime-sama.to) dans ton terminal.
+Lis les scans d'[Anime-Sama](https://anime-sama.to) et de [Mangas-Origines](https://mangas-origines.fr) dans ton terminal.
 Tu cherches un titre, tu choisis un chapitre, et tu fais défiler les pages comme sur le site.
 
 🇬🇧 [English version](README.md)
@@ -14,8 +14,23 @@ Tu cherches un titre, tu choisis un chapitre, et tu fais défiler les pages comm
 
 ## Ce qu'il te faut
 
-- [kitty](https://sw.kovidgoyal.net/kitty/). Les pages sont affichées avec son protocole graphique, les autres terminaux ne les montreront pas.
+- [kitty](https://sw.kovidgoyal.net/kitty/). Les pages sont affichées avec son protocole graphique, voir [Terminaux](#terminaux).
 - Rust, pour compiler.
+
+## Terminaux
+
+manga-sama affiche les pages avec le [protocole graphique de kitty](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
+D'autres terminaux qui l'implémentent peuvent marcher, mais seul kitty a été testé.
+
+| Terminal                              | État                                        |
+|---------------------------------------|---------------------------------------------|
+| kitty                                 | ✅ supporté                                 |
+| Ghostty                               | ❔ pas testé, implémente le protocole        |
+| WezTerm, Konsole                      | ❔ pas testé, support partiel                |
+| Alacritty, foot, GNOME Terminal, xterm | ❌ pas de protocole graphique kitty         |
+| tmux, en SSH                          | ❌ les images ne passent pas                 |
+
+Tu en as essayé un autre ? Ouvre une issue pour nous dire ce que ça donne.
 
 ## Installation
 
@@ -41,6 +56,7 @@ L'app est en anglais par défaut, `Ctrl+L` pour passer en français.
 |----------|------------------|
 | flèches  | se déplacer      |
 | `Entrée` | ouvrir           |
+| `Tab`    | source           |
 | `Ctrl+T` | tuiles           |
 | `Ctrl+L` | langue           |
 | `?`      | aide             |

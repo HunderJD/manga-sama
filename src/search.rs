@@ -10,9 +10,9 @@ use ratatui::widgets::{Block, List, ListState, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::Result;
-use crate::api::{self, Chapter, Link};
 use crate::i18n::{t, tf};
 use crate::kitty::{self, Geo, Placement};
+use crate::source::{Chapter, Source, Version, Work};
 use crate::tiles::{self, Tiles};
 
 /// Time without typing before searching.
@@ -22,31 +22,44 @@ const MIN_CHARS: usize = 2;
 
 /// A query and its results, from the search thread.
 struct Found {
+    source: Source,
     query: String,
-    result: Result<Vec<Link>, String>,
+    result: Result<Vec<Work>, String>,
 }
 
 /// What to fetch once the loading message is on screen.
 enum Todo {
-    Versions { slug: String, name: String },
-    Chapters { slug: String, path: String },
+    Versions {
+        work: String,
+        name: String,
+    },
+    Chapters {
+        work: String,
+        version: String,
+        name: String,
+    },
 }
 
 /// The scan versions of the chosen work, when it has several.
 struct Versions {
-    slug: String,
+    work: String,
     name: String,
-    links: Vec<Link>,
+    links: Vec<Version>,
     list: ListState,
 }
 
+/// What the search hands to the reader: the source, the work's name and its chapters.
+pub type Opened = (Source, String, Vec<Chapter>);
+
 pub struct Search {
+    /// The site searched; Tab switches.
+    source: Source,
     query: String,
     typed_at: Instant,
     /// Last query sent to the search thread.
     asked: String,
-    /// Results by query, for the whole session.
-    cache: HashMap<String, Vec<Link>>,
+    /// Results by source and query, for the whole session.
+    cache: HashMap<(Source, String), Vec<Work>>,
     /// Query whose results are on screen.
     shown: String,
     list: ListState,
@@ -60,7 +73,7 @@ pub struct Search {
     tiles: Tiles,
     /// Terminal size; `None` when it gives no pixel size, then there are no covers.
     geo: Option<Geo>,
-    queries: Sender<String>,
+    queries: Sender<(Source, String)>,
     found: Receiver<Found>,
 }
 
@@ -70,6 +83,7 @@ impl Search {
         let (found_tx, found) = mpsc::channel();
         thread::spawn(move || search(query_rx, found_tx));
         Search {
+            source: Source::AnimeSama,
             query: String::new(),
             typed_at: Instant::now(),
             asked: String::new(),
@@ -89,11 +103,8 @@ impl Search {
         }
     }
 
-    /// Runs until a work is opened (its API title and chapters) or the user quits (`None`).
-    pub fn run(
-        &mut self,
-        terminal: &mut DefaultTerminal,
-    ) -> Result<Option<(String, Vec<Chapter>)>> {
+    /// Runs until a work is opened or the user quits (`None`).
+    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<Option<Opened>> {
         // What kitty shows now.
         let mut shown = Vec::new();
         loop {
@@ -111,10 +122,10 @@ impl Search {
             kitty::frame(terminal, &mut shown, |frame| self.draw(frame))?;
             if let Some(todo) = self.todo.take() {
                 match self.fetch(todo) {
-                    Ok(Some(work)) => {
+                    Ok(Some(opened)) => {
                         // The reader draws its own images: take the covers off kitty.
                         self.tiles.reset()?;
-                        return Ok(Some(work));
+                        return Ok(Some(opened));
                     }
                     Ok(None) => {}
                     Err(e) => self.status = tf("error", &[("e", &e)]),
@@ -132,11 +143,17 @@ impl Search {
         }
     }
 
+    /// The results on screen.
+    fn results(&self) -> Option<&Vec<Work>> {
+        self.cache.get(&(self.source, self.shown.clone()))
+    }
+
     fn receive(&mut self, found: Found) {
-        let current = found.query == self.query.trim();
+        let current = found.source == self.source && found.query == self.query.trim();
         match found.result {
-            Ok(links) => {
-                self.cache.insert(found.query.clone(), links);
+            Ok(works) => {
+                self.cache
+                    .insert((found.source, found.query.clone()), works);
                 if current {
                     self.show(found.query);
                 }
@@ -155,40 +172,45 @@ impl Search {
         let query = self.query.trim();
         if query.chars().count() < MIN_CHARS
             || query == self.asked
-            || self.cache.contains_key(query)
+            || self.cache.contains_key(&(self.source, query.to_string()))
             || self.typed_at.elapsed() < DEBOUNCE
         {
             return;
         }
         self.asked = query.to_string();
         // Fails only if the search thread is gone; the status then stays on "searching".
-        let _ = self.queries.send(self.asked.clone());
+        let _ = self.queries.send((self.source, self.asked.clone()));
     }
 
+    /// The query or the source changed: show what's already known for it.
     fn edited(&mut self) {
         self.typed_at = Instant::now();
         self.status.clear();
         let query = self.query.trim().to_string();
-        if self.cache.contains_key(&query) {
+        if self.cache.contains_key(&(self.source, query.clone())) {
             self.show(query);
         }
     }
 
-    fn fetch(&mut self, todo: Todo) -> Result<Option<(String, Vec<Chapter>)>> {
+    fn fetch(&mut self, todo: Todo) -> Result<Option<Opened>> {
         match todo {
-            Todo::Versions { slug, name } => {
-                let mut links = api::versions(&slug)?;
+            Todo::Versions { work, name } => {
+                let mut links = self.source.versions(&work)?;
                 match links.len() {
                     0 => self.status = t("search.no_scans").into(),
                     1 => {
-                        let path = links.remove(0).path;
-                        self.todo = Some(Todo::Chapters { slug, path });
+                        let version = links.remove(0).id;
+                        self.todo = Some(Todo::Chapters {
+                            work,
+                            version,
+                            name,
+                        });
                     }
                     _ => {
                         self.status.clear();
                         let list = ListState::default().with_selected(Some(0));
                         self.versions = Some(Versions {
-                            slug,
+                            work,
                             name,
                             links,
                             list,
@@ -197,11 +219,18 @@ impl Search {
                 }
                 Ok(None)
             }
-            Todo::Chapters { slug, path } => {
-                let title = api::title(&slug, &path)?;
-                let chapters = api::chapters(&title)?;
+            Todo::Chapters {
+                work,
+                version,
+                name,
+            } => {
+                let chapters = self.source.chapters(&work, &version)?;
+                if chapters.is_empty() {
+                    self.status = t("search.no_scans").into();
+                    return Ok(None);
+                }
                 self.status.clear();
-                Ok(Some((title, chapters)))
+                Ok(Some((self.source, name, chapters)))
             }
         }
     }
@@ -240,11 +269,17 @@ impl Search {
         }
         match key.code {
             KeyCode::Esc => return true,
+            KeyCode::Tab => {
+                self.source = self.source.next();
+                self.shown.clear();
+                self.asked.clear();
+                self.edited();
+            }
             KeyCode::Char('t') if ctrl => self.grid = !self.grid,
             KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
                 if self.grid && self.geo.is_some() =>
             {
-                let len = self.cache.get(&self.shown).map_or(0, Vec::len);
+                let len = self.results().map_or(0, Vec::len);
                 let selected = self.list.selected().unwrap_or(0);
                 let columns = self.tiles.columns;
                 self.list
@@ -253,10 +288,10 @@ impl Search {
             KeyCode::Down => self.list.select_next(),
             KeyCode::Up => self.list.select_previous(),
             KeyCode::Enter => {
-                let results = self.cache.get(&self.shown);
-                if let Some(work) = self.list.selected().and_then(|i| results?.get(i)) {
-                    let (slug, name) = (work.path.clone(), work.name.clone());
-                    self.todo = Some(Todo::Versions { slug, name });
+                let chosen = self.list.selected().and_then(|i| self.results()?.get(i));
+                if let Some(work) = chosen {
+                    let (work, name) = (work.id.clone(), work.name.clone());
+                    self.todo = Some(Todo::Versions { work, name });
                     self.status = t("loading").into();
                 }
             }
@@ -284,8 +319,11 @@ impl Search {
             KeyCode::Enter => {
                 let chosen = versions.list.selected().and_then(|i| versions.links.get(i));
                 if let Some(version) = chosen {
-                    let (slug, path) = (versions.slug.clone(), version.path.clone());
-                    self.todo = Some(Todo::Chapters { slug, path });
+                    self.todo = Some(Todo::Chapters {
+                        work: versions.work.clone(),
+                        version: version.id.clone(),
+                        name: versions.name.clone(),
+                    });
                     self.status = t("loading").into();
                     self.versions = None;
                 }
@@ -300,11 +338,7 @@ impl Search {
         if let Some(versions) = &mut self.versions {
             // A small box on a blank screen: "<work> · Version" and the choices.
             let title = format!("{} · {}", versions.name, t("search.version"));
-            let items = versions
-                .links
-                .iter()
-                .map(|link| link.name.clone())
-                .collect();
+            let items = versions.links.iter().map(|v| v.name.clone()).collect();
             crate::popup(frame, &title, items, &mut versions.list);
             if let Some(list) = &mut self.languages {
                 crate::draw_languages(frame, list);
@@ -325,17 +359,18 @@ impl Search {
         frame.set_cursor_position(Position::new(cursor, input.y + 1));
 
         let mut placements = Vec::new();
-        match (self.cache.get(&self.shown), self.geo.filter(|_| self.grid)) {
-            (Some(links), _) if links.is_empty() => {
+        let works = self.cache.get(&(self.source, self.shown.clone()));
+        match (works, self.geo.filter(|_| self.grid)) {
+            (Some(works), _) if works.is_empty() => {
                 let text = format!(" {}", t("search.no_results"));
                 frame.render_widget(Paragraph::new(text).dim(), results)
             }
-            (Some(links), Some(geo)) => {
-                let selected = self.list.selected().unwrap_or(0).min(links.len() - 1);
-                placements = self.tiles.draw(frame, results, links, selected, geo);
+            (Some(works), Some(geo)) => {
+                let selected = self.list.selected().unwrap_or(0).min(works.len() - 1);
+                placements = self.tiles.draw(frame, results, works, selected, geo);
             }
-            (Some(links), None) => {
-                let list = List::new(links.iter().map(|link| link.name.as_str()))
+            (Some(works), None) => {
+                let list = List::new(works.iter().map(|work| work.name.as_str()))
                     .highlight_style(Modifier::REVERSED);
                 frame.render_stateful_widget(list, results, &mut self.list);
             }
@@ -343,12 +378,14 @@ impl Search {
         }
 
         let query = self.query.trim();
+        let searching = query.chars().count() >= MIN_CHARS
+            && !self.cache.contains_key(&(self.source, query.to_string()));
         let hint = if !self.status.is_empty() {
-            self.status.as_str()
-        } else if query.chars().count() >= MIN_CHARS && !self.cache.contains_key(query) {
-            t("search.searching")
+            self.status.clone()
+        } else if searching {
+            t("search.searching").to_string()
         } else {
-            t("search.hint")
+            tf("search.hint", &[("source", &self.source.name())])
         };
         frame.render_widget(Paragraph::new(hint).dim(), status);
 
@@ -366,12 +403,18 @@ impl Search {
 }
 
 /// One search at a time; queries already outdated when it is free are skipped.
-fn search(queries: Receiver<String>, found: Sender<Found>) -> Option<()> {
+fn search(queries: Receiver<(Source, String)>, found: Sender<Found>) -> Option<()> {
     loop {
         let query = queries.recv().ok()?;
         // Queries typed while the last search ran are outdated: keep only the newest.
-        let query = queries.try_iter().last().unwrap_or(query);
-        let result = api::search(&query).map_err(|e| e.to_string());
-        found.send(Found { query, result }).ok()?;
+        let (source, query) = queries.try_iter().last().unwrap_or(query);
+        let result = source.search(&query).map_err(|e| e.to_string());
+        found
+            .send(Found {
+                source,
+                query,
+                result,
+            })
+            .ok()?;
     }
 }

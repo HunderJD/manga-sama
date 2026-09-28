@@ -3,7 +3,7 @@
   "loading": "Chargement…",
   "search.title": "Recherche",
   "search.searching": "Recherche…",
-  "search.hint": "? aide",
+  "search.hint": "? aide · Tab : {source}",
   "search.no_results": "Aucun résultat.",
   "search.no_scans": "Aucun scan pour ce titre.",
   "search.version": "Version",
@@ -14,11 +14,12 @@
   "reader.end": "Fin du chapitre {n} · l : chapitre suivant",
   "reader.last": "Dernier chapitre.",
   "reader.no_pixels": "le terminal ne donne pas sa taille en pixels : lance manga-sama dans kitty",
-  "api.no_title": "titre introuvable sur {url}",
-  "api.bad_chapters": "liste des chapitres invalide : {json}",
   "pages.bad_image": "image illisible : {e}",
   "help": "Aide",
-  "search.help": "flèches  choisir\nEntrée   ouvrir\nCtrl+T   tuiles\nCtrl+L   langues\n?        cette aide\nÉchap    quitter",
+  "search.help": "flèches  choisir\nEntrée   ouvrir\nTab      source\nCtrl+T   tuiles\nCtrl+L   langues\n?        cette aide\nÉchap    quitter",
   "language": "Français",
-  "languages": "Langues"
+  "languages": "Langues",
+  "source.no_title": "titre introuvable sur {url}",
+  "source.bad_chapters": "liste des chapitres invalide : {json}",
+  "source.no_pages": "aucune page trouvée sur {url}"
 }

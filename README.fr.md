@@ -57,7 +57,7 @@ L'app est en anglais par défaut, `Ctrl+L` pour passer en français.
 | `F2`                  | masquer la barre                                |
 | `Ctrl+L`              | langue                                          |
 | `?`                   | aide                                            |
-| `⌫` `Échap`           | retour à la recherche                           |
+| `Backspace` `Échap`   | retour à la recherche                           |
 | `q`                   | quitter                                         |
 
 ## Logs
@@ -75,9 +75,8 @@ Les issues et les pull requests sont les bienvenues.
 
 ### À propos de l'IA
 
-Coder avec une IA, pas de souci, je le fais aussi. Mais tu dois pouvoir expliquer chaque ligne que tu envoies.
-Comprends ce que tu fais, essaie de suivre des principes comme SOLID, et reste simple.
-S'il te plaît, pas de vibe-coding que personne ne pourra maintenir.
+Coder avec une IA, pas de souci, je le fais aussi, mais tu dois pouvoir expliquer chaque ligne que tu envoies.
+Lis la [politique IA](AI-POLICY.md) (en anglais) avant d'ouvrir une pull request.
 
 ## Licence
 

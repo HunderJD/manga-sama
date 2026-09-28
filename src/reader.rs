@@ -31,7 +31,7 @@ const HELP: [&str; 8] = [
     "F1            liste des chapitres",
     "F2            masquer la barre",
     "?             cette aide",
-    "Échap         retour",
+    "⌫ Échap       retour",
     "q             quitter",
 ];
 
@@ -454,6 +454,8 @@ impl Reader<'_> {
         let half = i64::from(self.view / 2);
         match code {
             KeyCode::Char('q') => return Ok(Some(Exit::Quit)),
+            // Back to the search from anywhere, even from the chapter list.
+            KeyCode::Backspace => return Ok(Some(Exit::Back)),
             KeyCode::F(2) => self.bar = !self.bar,
             _ if self.overlay.is_some() => self.handle_overlay(code)?,
             KeyCode::Esc => return Ok(Some(Exit::Back)),

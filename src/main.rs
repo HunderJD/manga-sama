@@ -4,6 +4,7 @@ mod kitty;
 mod pages;
 mod reader;
 mod search;
+mod tiles;
 
 use std::io::stdout;
 

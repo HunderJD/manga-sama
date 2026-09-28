@@ -1,14 +1,46 @@
-//! The few commands of the kitty graphics protocol the reader needs:
+//! The few commands of the kitty graphics protocol the app needs:
 //! <https://sw.kovidgoyal.net/kitty/graphics-protocol/>
 
 use std::io::{Write, stdout};
 use std::os::unix::ffi::OsStrExt;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering::Relaxed;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use ratatui::crossterm::terminal::window_size;
 
 use crate::Result;
+use crate::i18n::t;
 use crate::pages::Image;
+
+/// Terminal size in cells, and the size of a cell in pixels.
+#[derive(Clone, Copy, PartialEq)]
+pub struct Geo {
+    pub cols: u16,
+    pub rows: u16,
+    pub cell_w: u32,
+    pub cell_h: u32,
+}
+
+impl Geo {
+    pub fn now() -> Result<Self> {
+        let size = window_size()?;
+        if size.columns == 0
+            || size.rows == 0
+            || size.width < size.columns
+            || size.height < size.rows
+        {
+            return Err(t("reader.no_pixels").into());
+        }
+        Ok(Geo {
+            cols: size.columns,
+            rows: size.rows,
+            cell_w: u32::from(size.width / size.columns),
+            cell_h: u32::from(size.height / size.rows),
+        })
+    }
+}
 
 /// Part of an image shown 1:1: source rectangle in pixels, drawn from cell (`x`, `y`) + `offset` px down.
 #[derive(PartialEq)]
@@ -27,9 +59,12 @@ fn command(keys: &str) -> String {
     format!("\x1b_Gq=2,{keys}\x1b\\")
 }
 
-/// Stores `image` in kitty under `id`, without showing it. The pixels go through a temporary
+/// Stores `image` in kitty, without showing it, and returns its id. The pixels go through a temporary
 /// file that kitty deletes after reading (`t=t`), so megabytes never go through the terminal.
-pub fn transmit(id: u32, image: &Image) -> Result<()> {
+pub fn transmit(image: &Image) -> Result<u32> {
+    // One counter for the whole app, so covers and pages never share an id.
+    static NEXT_ID: AtomicU32 = AtomicU32::new(1);
+    let id = NEXT_ID.fetch_add(1, Relaxed);
     let name = format!(
         "tty-graphics-protocol-manga-sama-{}-{id}",
         std::process::id()
@@ -40,7 +75,8 @@ pub fn transmit(id: u32, image: &Image) -> Result<()> {
     let (width, height) = (image.width, image.height);
     send(&command(&format!(
         "a=t,t=t,f=24,s={width},v={height},i={id};{path}"
-    )))
+    )))?;
+    Ok(id)
 }
 
 /// Shows part of a stored image. The placement id is always 1, so placing an image again
@@ -62,6 +98,22 @@ pub fn hide(id: u32) -> String {
 /// Deletes image `id` from kitty's memory.
 pub fn free(id: u32) -> String {
     command(&format!("a=d,d=I,i={id}"))
+}
+
+/// Moves kitty from the `shown` placements to the new ones, sending only what changed.
+pub fn update(shown: &mut Vec<Placement>, placements: Vec<Placement>) -> Result<()> {
+    if placements == *shown {
+        return Ok(());
+    }
+    let gone = shown
+        .iter()
+        .filter(|old| !placements.iter().any(|p| p.id == old.id))
+        .map(|old| hide(old.id));
+    let moved = placements.iter().filter(|p| !shown.contains(p)).map(place);
+    let commands: String = gone.chain(moved).collect();
+    send(&commands)?;
+    *shown = placements;
+    Ok(())
 }
 
 /// Writes commands in one go, so kitty never shows a half-updated frame.

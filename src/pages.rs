@@ -143,7 +143,8 @@ fn work(jobs: Receiver<Job>, done: Sender<Loaded>) {
     }
 }
 
-fn decode(bytes: &[u8], width: u32) -> Result<Image, String> {
+/// Decodes an image and resizes it to exactly `width` px, keeping its aspect.
+pub fn decode(bytes: &[u8], width: u32) -> Result<Image, String> {
     let image = image::load_from_memory(bytes).map_err(|e| tf("pages.bad_image", &[("e", &e)]))?;
     // Exactly the column width, up or down: the reader shows pages 1:1.
     let image = if image.width() == width {

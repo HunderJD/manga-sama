@@ -30,6 +30,8 @@ static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
 pub struct Link {
     pub name: String,
     pub path: String,
+    /// Thumbnail URL, for search results.
+    pub cover: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -90,6 +92,11 @@ pub fn chapters(title: &str) -> Result<Vec<Chapter>> {
     parse_chapters(&get(&url)?.read_to_string()?)
 }
 
+/// A search result's thumbnail. They live on jsdelivr (Anime-Sama's image repository), not on the site.
+pub fn cover(url: &str) -> Result<Vec<u8>> {
+    Ok(get(url)?.read_to_vec()?)
+}
+
 pub fn page(title: &str, chapter: u32, page: u32) -> Result<Vec<u8>> {
     let url = format!("{BASE}/s2/scans/{}/{chapter}/{page}.jpg", encode(title));
     Ok(get(&url)?.read_to_vec()?)
@@ -99,6 +106,7 @@ fn parse_search(html: &str) -> Vec<Link> {
     let doc = Html::parse_document(html);
     let link = Selector::parse(r#".catalog-card a[href*="/catalogue/"]"#).unwrap();
     let name = Selector::parse(".card-title").unwrap();
+    let cover = Selector::parse("img").unwrap();
     doc.select(&link)
         .filter_map(|a| {
             let slug = a
@@ -107,9 +115,11 @@ fn parse_search(html: &str) -> Vec<Link> {
                 .nth(1)?
                 .trim_end_matches('/');
             let name = a.select(&name).next()?.text().collect::<String>();
+            let cover = a.select(&cover).next().and_then(|img| img.attr("src"));
             (!slug.is_empty()).then(|| Link {
                 name: name.trim().to_string(),
                 path: slug.to_string(),
+                cover: cover.map(String::from),
             })
         })
         .collect()
@@ -126,6 +136,7 @@ fn parse_versions(html: &str) -> Vec<Link> {
             Some(Link {
                 name: name.to_string(),
                 path: path.to_string(),
+                cover: None,
             })
         })
         .filter(|v| (v.name.as_str(), v.path.as_str()) != ("nom", "url"))
@@ -162,7 +173,7 @@ mod tests {
     fn search_results() {
         let html = r#"<div id="list_catalog">
             <div class="catalog-card"><a href="https://anime-sama.to/catalogue/berserk">
-                <img alt="Berserk"><h2 class="card-title">Berserk</h2></a></div>
+                <img src="https://cdn.jsdelivr.net/berserk.webp"><h2 class="card-title">Berserk</h2></a></div>
             <div class="catalog-card"><a href="https://anime-sama.to/catalogue/one-piece/">
                 <h2 class="card-title"> One Piece </h2></a></div>
             <a href="https://anime-sama.to/catalogue/">Catalogue</a>
@@ -170,9 +181,14 @@ mod tests {
         let works = parse_search(html);
         let got: Vec<_> = works
             .iter()
-            .map(|w| (w.name.as_str(), w.path.as_str()))
+            .map(|w| (w.name.as_str(), w.path.as_str(), w.cover.as_deref()))
             .collect();
-        assert_eq!(got, [("Berserk", "berserk"), ("One Piece", "one-piece")]);
+        let berserk = (
+            "Berserk",
+            "berserk",
+            Some("https://cdn.jsdelivr.net/berserk.webp"),
+        );
+        assert_eq!(got, [berserk, ("One Piece", "one-piece", None)]);
     }
 
     #[test]
@@ -228,6 +244,8 @@ mod tests {
             .into_iter()
             .find(|w| w.path == "berserk")
             .expect("berserk trouvé");
+        let thumbnail = cover(work.cover.as_deref().expect("a cover")).unwrap();
+        image::load_from_memory(&thumbnail).unwrap();
         let version = versions(&work.path)
             .unwrap()
             .into_iter()

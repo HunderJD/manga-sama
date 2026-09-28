@@ -2,6 +2,7 @@
 name = "manga-sama"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 # Already pulled in by ureq; encodes the file path handed to kitty.

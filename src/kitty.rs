@@ -8,7 +8,9 @@ use std::sync::atomic::Ordering::Relaxed;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use ratatui::crossterm::terminal::window_size;
+use ratatui::crossterm::execute;
+use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate, window_size};
+use ratatui::{DefaultTerminal, Frame};
 
 use crate::Result;
 use crate::i18n::t;
@@ -113,10 +115,7 @@ pub fn free(ids: impl IntoIterator<Item = u32>) -> Result<()> {
 }
 
 /// Moves kitty from the `shown` placements to the new ones, sending only what changed.
-pub fn update(shown: &mut Vec<Placement>, placements: Vec<Placement>) -> Result<()> {
-    if placements == *shown {
-        return Ok(());
-    }
+fn update(shown: &mut Vec<Placement>, placements: Vec<Placement>) -> Result<()> {
     let gone = shown
         .iter()
         .filter(|old| !placements.iter().any(|p| p.id == old.id))
@@ -125,6 +124,21 @@ pub fn update(shown: &mut Vec<Placement>, placements: Vec<Placement>) -> Result<
     let commands: String = gone.chain(moved).collect();
     send(&commands)?;
     *shown = placements;
+    Ok(())
+}
+
+/// Draws a frame: the text with `draw`, then the images it returns, updated from `shown`.
+/// Kitty shows both together (synchronized update), never a frame with only one of them.
+pub fn frame(
+    terminal: &mut DefaultTerminal,
+    shown: &mut Vec<Placement>,
+    draw: impl FnOnce(&mut Frame) -> Vec<Placement>,
+) -> Result<()> {
+    execute!(stdout(), BeginSynchronizedUpdate)?;
+    let mut placements = Vec::new();
+    terminal.draw(|frame| placements = draw(frame))?;
+    update(shown, placements)?;
+    execute!(stdout(), EndSynchronizedUpdate)?;
     Ok(())
 }
 

@@ -33,8 +33,6 @@ pub struct Tiles {
     thumbs: HashMap<String, Option<Stored>>,
     /// Covers of the last job sent.
     asked: Vec<String>,
-    /// What kitty shows now.
-    shown: Vec<Placement>,
     /// First grid row on screen.
     top: usize,
     /// Tiles per row, from the last frame: ↑ ↓ move by this much.
@@ -53,7 +51,6 @@ impl Tiles {
             done,
             thumbs: HashMap::new(),
             asked: Vec::new(),
-            shown: Vec::new(),
             top: 0,
             columns: 1,
             width: 0,
@@ -83,12 +80,7 @@ impl Tiles {
         kitty::free(self.thumbs.values().flatten().map(|image| image.id))?;
         self.thumbs.clear();
         self.asked.clear();
-        self.shown.clear();
         Ok(())
-    }
-
-    pub fn place(&mut self, placements: Vec<Placement>) -> Result<()> {
-        kitty::update(&mut self.shown, placements)
     }
 
     /// Draws the grid with `selected` highlighted, asks for the missing covers on screen,

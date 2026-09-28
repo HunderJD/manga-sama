@@ -1,9 +1,6 @@
-use std::io::stdout;
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
-use ratatui::crossterm::execute;
-use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Stylize;
 use ratatui::widgets::{ListState, Paragraph, Wrap};
@@ -148,8 +145,6 @@ struct Reader<'a> {
     view: u32,
     bar: bool,
     overlay: Option<Overlay>,
-    /// What kitty shows now.
-    shown: Vec<Placement>,
 }
 
 pub fn run(
@@ -174,7 +169,6 @@ pub fn run(
         view: 0,
         bar: true,
         overlay: Some(chapter_list(0)),
-        shown: Vec::new(),
     };
     // Nothing is downloaded until a chapter is chosen in the list.
     let exit = reader.event_loop(terminal);
@@ -205,7 +199,6 @@ impl Reader<'_> {
 
     /// Frees the chapter's images from kitty's memory.
     fn delete_images(&mut self) -> Result<()> {
-        self.shown.clear();
         kitty::free(self.pages.iter().filter_map(|page| match page {
             Page::Ready(image) => Some(image.id),
             _ => None,
@@ -227,6 +220,8 @@ impl Reader<'_> {
     }
 
     fn event_loop(&mut self, terminal: &mut DefaultTerminal) -> Result<Exit> {
+        // What kitty shows now.
+        let mut shown = Vec::new();
         loop {
             while let Ok(loaded) = self.io.done.try_recv() {
                 self.receive(loaded)?;
@@ -246,12 +241,7 @@ impl Reader<'_> {
                     .min(Duration::from_millis(16)),
             );
             self.frame_at = now;
-            let mut placements = Vec::new();
-            // Kitty shows the text and the images of a frame together.
-            execute!(stdout(), BeginSynchronizedUpdate)?;
-            terminal.draw(|frame| placements = self.draw(frame))?;
-            kitty::update(&mut self.shown, placements)?;
-            execute!(stdout(), EndSynchronizedUpdate)?;
+            kitty::frame(terminal, &mut shown, |frame| self.draw(frame))?;
             // ~120 fps while scrolling. Drain the whole burst (mouse wheel) before drawing again.
             let mut timeout = Duration::from_millis(if self.pending == 0 { 50 } else { 8 });
             while event::poll(timeout)? {

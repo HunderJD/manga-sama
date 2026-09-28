@@ -1,12 +1,9 @@
 use std::collections::HashMap;
-use std::io::stdout;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use ratatui::crossterm::execute;
-use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use ratatui::layout::{Constraint, Layout, Position};
 use ratatui::style::{Modifier, Stylize};
 use ratatui::widgets::{Block, List, ListState, Paragraph};
@@ -15,7 +12,7 @@ use ratatui::{DefaultTerminal, Frame};
 use crate::Result;
 use crate::api::{self, Chapter, Link};
 use crate::i18n::{t, tf};
-use crate::kitty::{Geo, Placement};
+use crate::kitty::{self, Geo, Placement};
 use crate::tiles::{self, Tiles};
 
 /// Time without typing before searching.
@@ -96,6 +93,8 @@ impl Search {
         &mut self,
         terminal: &mut DefaultTerminal,
     ) -> Result<Option<(String, Vec<Chapter>)>> {
+        // What kitty shows now.
+        let mut shown = Vec::new();
         loop {
             let found: Vec<Found> = self.found.try_iter().collect();
             for (query, result) in found {
@@ -109,12 +108,7 @@ impl Search {
                 self.geo = geo;
                 self.tiles.reset()?;
             }
-            let mut placements = Vec::new();
-            // Kitty shows the text and the covers of a frame together.
-            execute!(stdout(), BeginSynchronizedUpdate)?;
-            terminal.draw(|frame| placements = self.draw(frame))?;
-            self.tiles.place(placements)?;
-            execute!(stdout(), EndSynchronizedUpdate)?;
+            kitty::frame(terminal, &mut shown, |frame| self.draw(frame))?;
             if let Some(todo) = self.todo.take() {
                 match self.fetch(todo) {
                     Ok(Some(work)) => {

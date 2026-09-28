@@ -1,3 +1,9 @@
+//! Anime-Sama client.
+//!
+//! Search, scan versions and work titles are read from the site's HTML: Anime-Sama has no JSON API
+//! for them (its own JS only gets an HTML fragment for the search bar). Only the chapter list
+//! (`get_nb_chap_et_img.php`) is JSON, and pages are plain image files.
+
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::sync::LazyLock;

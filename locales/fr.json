@@ -9,7 +9,7 @@
   "search.version": "Version",
   "reader.chapter": "Chapitre {n}",
   "reader.chapters": "Chapitres",
-  "reader.help": "j k  molette     défiler\nd u              demi-écran\nh l              chapitre précédent / suivant\nF1               liste des chapitres (tape un numéro)\nF2               masquer la barre\nCtrl+L           langues\n?                cette aide\nBackspace Échap  retour\nq                quitter",
+  "reader.help": "j k  molette     défiler\nd u              demi-écran\nh l  clics       chapitre précédent / suivant\nF1               liste des chapitres (tape un numéro)\nF2               masquer la barre\nCtrl+L           langues\n?                cette aide\nBackspace Échap  retour\nq                quitter",
   "reader.status": "{title} · Chapitre {chapter}/{chapters} · Page {page}/{pages} · ? aide",
   "reader.end": "Fin du chapitre {n} · l : chapitre suivant",
   "reader.last": "Dernier chapitre.",

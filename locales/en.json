@@ -9,7 +9,7 @@
   "search.version": "Version",
   "reader.chapter": "Chapter {n}",
   "reader.chapters": "Chapters",
-  "reader.help": "j k  wheel     scroll\nd u            half screen\nh l            previous / next chapter\nF1             chapter list (type a number)\nF2             hide the bar\nCtrl+L         languages\n?              this help\nBackspace Esc  back\nq              quit",
+  "reader.help": "j k  wheel     scroll\nd u            half screen\nh l  clicks    previous / next chapter\nF1             chapter list (type a number)\nF2             hide the bar\nCtrl+L         languages\n?              this help\nBackspace Esc  back\nq              quit",
   "reader.status": "{title} · Chapter {chapter}/{chapters} · Page {page}/{pages} · ? help",
   "reader.end": "End of chapter {n} · l: next chapter",
   "reader.last": "Last chapter.",

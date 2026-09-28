@@ -52,7 +52,7 @@ L'app est en anglais par défaut, `Ctrl+L` pour passer en français.
 |-----------------------|-------------------------------------------------|
 | `j` `k`, molette      | défiler                                         |
 | `d` `u`               | demi-écran                                      |
-| `h` `l`               | chapitre précédent / suivant                    |
+| `h` `l`, clic gauche / droit | chapitre précédent / suivant             |
 | `F1`                  | liste des chapitres, tape un numéro pour y aller |
 | `F2`                  | masquer la barre                                |
 | `Ctrl+L`              | langue                                          |

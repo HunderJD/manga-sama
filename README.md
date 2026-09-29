@@ -46,34 +46,40 @@ cargo install --path .
 manga-sama
 ```
 
+Four screens, one after the other: **search → version → chapters → reader**.
 Type at least two letters, the search starts as soon as you stop typing.
-The reader opens on the chapter list.
+The version screen only shows up when a work has several (e.g. color and black and white).
+`Backspace` or `Esc` goes back one screen. On every screen, `?` shows its keys, `Ctrl+L` changes the language and `Ctrl+C` quits.
 
 ### Search
 
-| Key      |                  |
-|----------|------------------|
-| arrows   | move             |
-| `Enter`  | open             |
-| `Ctrl+T` | cover tiles      |
-| `Ctrl+L` | language         |
-| `?`      | help             |
-| `Esc`    | quit             |
+| Key       |                       |
+|-----------|-----------------------|
+| arrows    | select                |
+| `Enter`   | open                  |
+| `Ctrl+T`  | cover tiles on / off  |
+| `Esc`     | quit                  |
+
+### Version and chapters
+
+| Key                 |                                        |
+|---------------------|----------------------------------------|
+| `↑` `↓`, `j` `k`    | select                                 |
+| `0`-`9`             | chapters only: type a chapter number   |
+| `Enter`             | open                                   |
+| `Backspace` `Esc`   | back                                   |
+| `q`                 | quit                                   |
 
 ### Reader
 
-| Key                   |                                            |
-|-----------------------|--------------------------------------------|
-| `j` `k`, mouse wheel  | scroll                                     |
-| `d` `u`               | half a screen                              |
-| `h` `l`, left / right click | previous / next chapter              |
-| `F1`                  | chapter list, type a number to jump to it  |
-| `Shift+H`             | hide / show the status bar                 |
-| `Ctrl+L`              | language                                   |
-| `?`                   | help                                       |
-| `Backspace`           | back to the search                         |
-| `Esc`                 | close the popup, otherwise back to the search |
-| `q`                   | quit                                       |
+| Key                          |                                  |
+|------------------------------|----------------------------------|
+| `j` `k`, mouse wheel         | scroll                           |
+| `d` `u`                      | half a screen                    |
+| `h` `l`, left / right click  | previous / next chapter          |
+| `F1`, `Backspace`, `Esc`     | back to the chapter list         |
+| `Shift+H`                    | hide / show the status bar       |
+| `q`                          | quit                             |
 
 ## Logs
 
@@ -81,35 +87,12 @@ Every HTTP request is logged, but only when stderr is redirected:
 
 ```sh
 manga-sama 2> /tmp/manga-sama.log
-tail -f /tmp/manga-sama.log   # in another kitty window
+tail -f /tmp/manga-sama.log   # in another terminal
 ```
 
 ## Contributing
 
 Issues and pull requests are welcome.
-
-### Code map
-
-A file ending in `_loader.rs` fetches in the background and draws nothing.
-
-```
-src/
-├── main.rs                entry point: sets up the terminal, then goes back and forth between search and reading
-├── i18n.rs                the app's texts in English and French, from locales/*.json built into the binary
-├── kitty.rs               draws images with the kitty graphics protocol, reads the terminal size; used by both screens
-├── search/
-│   ├── mod.rs             the search screen: what you see and the keys (live search, list or tiles, version picker)
-│   ├── results_loader.rs  background thread that runs the searches and returns their results
-│   ├── tiles.rs           results as a grid of covers (Ctrl+T): layout and drawing
-│   └── cover_loader.rs    background thread that downloads and decodes the covers, with their cache
-├── reader/
-│   ├── mod.rs             the reading screen: what you see, keys, scrolling, asking the page loader for pages
-│   ├── page_loader.rs     background threads that download and decode the pages, with their cache
-│   └── scroll.rs          scrolling math as pure functions: visible pages, what to load, easing
-└── sources/
-    ├── mod.rs             where manga come from: one module per website
-    └── anime_sama.rs      talks to Anime-Sama: search, scan versions, chapter lists, page and cover images
-```
 
 ### About AI
 

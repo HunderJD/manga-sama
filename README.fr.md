@@ -46,35 +46,40 @@ cargo install --path .
 manga-sama
 ```
 
+Quatre écrans, l'un après l'autre : **recherche → version → chapitres → lecture**.
 Tape au moins deux lettres, la recherche part dès que tu t'arrêtes de taper.
-Le lecteur s'ouvre sur la liste des chapitres.
-L'app est en anglais par défaut, `Ctrl+L` pour passer en français.
+L'écran des versions n'apparaît que si l'œuvre en a plusieurs (par exemple couleur et noir et blanc).
+`Backspace` ou `Échap` revient à l'écran précédent. Sur chaque écran, `?` affiche ses touches, `Ctrl+L` change la langue (anglais par défaut) et `Ctrl+C` quitte.
 
 ### Recherche
 
-| Touche   |                  |
-|----------|------------------|
-| flèches  | se déplacer      |
-| `Entrée` | ouvrir           |
-| `Ctrl+T` | tuiles           |
-| `Ctrl+L` | langue           |
-| `?`      | aide             |
-| `Échap`  | quitter          |
+| Touche    |                        |
+|-----------|------------------------|
+| flèches   | choisir                |
+| `Entrée`  | ouvrir                 |
+| `Ctrl+T`  | tuiles de couvertures  |
+| `Échap`   | quitter                |
+
+### Version et chapitres
+
+| Touche               |                                              |
+|----------------------|----------------------------------------------|
+| `↑` `↓`, `j` `k`     | choisir                                      |
+| `0`-`9`              | chapitres seulement : taper un numéro        |
+| `Entrée`             | ouvrir                                       |
+| `Backspace` `Échap`  | retour                                       |
+| `q`                  | quitter                                      |
 
 ### Lecteur
 
-| Touche                |                                                 |
-|-----------------------|-------------------------------------------------|
-| `j` `k`, molette      | défiler                                         |
-| `d` `u`               | demi-écran                                      |
-| `h` `l`, clic gauche / droit | chapitre précédent / suivant             |
-| `F1`                  | liste des chapitres, tape un numéro pour y aller |
-| `Shift+H`             | masquer / afficher la barre                     |
-| `Ctrl+L`              | langue                                          |
-| `?`                   | aide                                            |
-| `Backspace`           | retour à la recherche                           |
-| `Échap`               | fermer la popup, sinon retour à la recherche    |
-| `q`                   | quitter                                         |
+| Touche                        |                                  |
+|-------------------------------|----------------------------------|
+| `j` `k`, molette              | défiler                          |
+| `d` `u`                       | demi-écran                       |
+| `h` `l`, clic gauche / droit  | chapitre précédent / suivant     |
+| `F1`, `Backspace`, `Échap`    | retour à la liste des chapitres  |
+| `Shift+H`                     | masquer / afficher la barre      |
+| `q`                           | quitter                          |
 
 ## Logs
 
@@ -82,35 +87,12 @@ Chaque requête HTTP est écrite dans le log, mais seulement si la sortie d'erre
 
 ```sh
 manga-sama 2> /tmp/manga-sama.log
-tail -f /tmp/manga-sama.log   # dans une autre fenêtre kitty
+tail -f /tmp/manga-sama.log   # dans un autre terminal
 ```
 
 ## Contribuer
 
 Les issues et les pull requests sont les bienvenues.
-
-### Carte du code
-
-Un fichier qui finit par `_loader.rs` va chercher des données en fond et n'affiche rien.
-
-```
-src/
-├── main.rs                point d'entrée : prépare le terminal, puis alterne entre recherche et lecture
-├── i18n.rs                les textes de l'app en anglais et en français, depuis locales/*.json intégrés au binaire
-├── kitty.rs               affiche les images avec le protocole graphique de kitty, lit la taille du terminal ; sert aux deux écrans
-├── search/
-│   ├── mod.rs             l'écran de recherche : l'affichage et les touches (recherche en direct, liste ou tuiles, versions)
-│   ├── results_loader.rs  le thread de fond qui lance les recherches et renvoie les résultats
-│   ├── tiles.rs           les résultats en grille de couvertures (Ctrl+T) : disposition et affichage
-│   └── cover_loader.rs    le thread de fond qui télécharge et décode les couvertures, avec leur cache
-├── reader/
-│   ├── mod.rs             l'écran de lecture : affichage, touches, défilement, demandes de pages au chargeur
-│   ├── page_loader.rs     les threads de fond qui téléchargent et décodent les pages, avec leur cache
-│   └── scroll.rs          les calculs du défilement en fonctions pures : pages visibles, quoi charger, glisse
-└── sources/
-    ├── mod.rs             d'où viennent les mangas : un module par site
-    └── anime_sama.rs      parle à Anime-Sama : recherche, versions, listes de chapitres, pages et couvertures
-```
 
 ### À propos de l'IA
 

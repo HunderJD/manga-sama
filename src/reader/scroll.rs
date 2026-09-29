@@ -86,8 +86,15 @@ pub fn near_end(last: usize, len: usize) -> bool {
 /// the rest fits in `KITTY_BUDGET`. Pages in `near` are always kept. Distance rather than
 /// "least recently seen": a reader rarely jumps far back, so far pages are the least useful.
 pub fn to_free(stored: &[(usize, u64)], near: &Range<usize>) -> Vec<usize> {
+    // How many pages `page` is from `near`: 0 inside it.
     let distance = |page: usize| {
-        near.start.saturating_sub(page) + page.saturating_sub(near.end.saturating_sub(1))
+        if page < near.start {
+            near.start - page
+        } else if page >= near.end {
+            page + 1 - near.end
+        } else {
+            0
+        }
     };
     let mut stored = stored.to_vec();
     stored.sort_by_key(|&(page, _)| distance(page));

@@ -6,12 +6,10 @@ mod scroll;
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
-use ratatui::crossterm::event::{
-    self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
-};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Stylize;
-use ratatui::widgets::{ListState, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Frame};
 
 use self::page_loader::{Loaded, PageLoader, Plan};
@@ -20,12 +18,24 @@ use crate::Result;
 use crate::i18n::{t, tf};
 use crate::kitty::{self, Geo, Placement, Stored};
 use crate::sources::anime_sama::Chapter;
+use crate::ui::{Popups, Shared};
 
-#[derive(PartialEq)]
-pub enum Exit {
+/// How the reader is left.
+enum Exit {
+    /// To the chapter list (Backspace, Esc, F1).
+    Chapters,
     Quit,
-    Back,
 }
+
+const HELP: &[(&str, &str)] = &[
+    ("j k", "help.scroll"),
+    ("d u", "help.half"),
+    ("h l", "help.chapter"),
+    ("F1", "help.chapters"),
+    ("Shift+H", "help.bar"),
+    ("Backspace Esc", "help.back"),
+    ("q", "help.quit"),
+];
 
 /// Rows scrolled by j/k and by one mouse wheel notch.
 const STEP_ROWS: u32 = 3;
@@ -48,36 +58,10 @@ impl Page {
     }
 }
 
-enum Overlay {
-    Chapters {
-        list: ListState,
-        /// The chapter number typed so far.
-        filter: String,
-    },
-    Help,
-    Languages(ListState),
-}
-
-fn chapter_list(selected: usize) -> Overlay {
-    let list = ListState::default().with_selected(Some(selected));
-    Overlay::Chapters {
-        list,
-        filter: String::new(),
-    }
-}
-
-/// Indexes of the chapters whose number starts with `filter`.
-fn matching(chapters: &[Chapter], filter: &str) -> Vec<usize> {
-    let starts = |c: &Chapter| c.number.to_string().starts_with(filter);
-    (0..chapters.len())
-        .filter(|&i| starts(&chapters[i]))
-        .collect()
-}
-
 struct Reader<'a> {
     loader: &'a mut PageLoader,
-    title: String,
-    chapters: Vec<Chapter>,
+    title: &'a str,
+    chapters: &'a [Chapter],
     /// Index of the chapter read, in `chapters`.
     current: usize,
     job: u64,
@@ -94,20 +78,23 @@ struct Reader<'a> {
     heights: Vec<u32>,
     view: u32,
     bar: bool,
-    overlay: Option<Overlay>,
+    popups: Popups,
 }
 
+/// Reads `chapters[chapter]` of `title` (the name the site knows the work by). Returns the chapter
+/// being read when going back to the chapter list, `None` to quit.
 pub fn run(
     terminal: &mut DefaultTerminal,
     loader: &mut PageLoader,
-    title: String,
-    chapters: Vec<Chapter>,
-) -> Result<Exit> {
+    title: &str,
+    chapters: &[Chapter],
+    chapter: usize,
+) -> Result<Option<usize>> {
     let mut reader = Reader {
         loader,
         title,
         chapters,
-        current: 0,
+        current: chapter,
         job: 0,
         pages: Vec::new(),
         pos: Pos::default(),
@@ -118,14 +105,17 @@ pub fn run(
         heights: Vec::new(),
         view: 0,
         bar: true,
-        // Opens on the chapter list: nothing is downloaded until a chapter is chosen.
-        overlay: Some(chapter_list(0)),
+        popups: Popups::default(),
     };
+    reader.load()?;
     let exit = reader.event_loop(terminal);
     // An empty plan: leaving the reader stops the downloads.
     reader.loader.plan(Plan::default());
     reader.free_images()?;
-    exit
+    Ok(match exit? {
+        Exit::Chapters => Some(reader.current),
+        Exit::Quit => None,
+    })
 }
 
 impl Reader<'_> {
@@ -212,7 +202,7 @@ impl Reader<'_> {
         }
         self.loader.plan(Plan {
             job: self.job,
-            title: self.title.clone(),
+            title: self.title.to_string(),
             width: self.geo.page_px(),
             decode,
             download,
@@ -253,9 +243,7 @@ impl Reader<'_> {
             if geo != self.geo {
                 // Resizing clears the screen, which drops kitty's images: send them again at the new width.
                 self.geo = geo;
-                if !self.pages.is_empty() {
-                    self.load()?;
-                }
+                self.load()?;
             }
             self.follow_view()?;
             let now = Instant::now();
@@ -302,21 +290,13 @@ impl Reader<'_> {
         if self.bar {
             self.draw_bar(frame, bar);
         }
-        match &mut self.overlay {
-            None => return placements,
-            Some(Overlay::Chapters { list, filter }) => {
-                let items = matching(&self.chapters, filter)
-                    .into_iter()
-                    .map(|i| tf("reader.chapter", &[("n", &self.chapters[i].number)]))
-                    .collect();
-                let title = format!("{} {filter}", t("reader.chapters"));
-                crate::popup(frame, title.trim_end(), items, list);
-            }
-            Some(Overlay::Languages(list)) => crate::draw_languages(frame, list),
-            Some(Overlay::Help) => crate::draw_help(frame, "reader.help"),
-        }
+        self.popups.draw(frame, HELP);
         // Images are drawn above the text: hide them while a popup is open.
-        Vec::new()
+        if self.popups.is_open() {
+            Vec::new()
+        } else {
+            placements
+        }
     }
 
     /// Page heights and view size for this frame, keeping the view inside the chapter.
@@ -343,10 +323,6 @@ impl Reader<'_> {
 
     /// Draws the loading and error messages and the end line; returns where the page images go.
     fn draw_pages(&self, frame: &mut Frame, main: Rect) -> Vec<Placement> {
-        if self.pages.is_empty() {
-            // No chapter chosen yet.
-            return Vec::new();
-        }
         let geo = self.geo;
         let cols = geo.page_cols().min(main.width);
         let x = main.x + (main.width - cols) / 2;
@@ -410,17 +386,13 @@ impl Reader<'_> {
 
     fn handle(&mut self, event: Event) -> Result<Option<Exit>> {
         let code = match event {
-            Event::Key(key) if key.kind == KeyEventKind::Press => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    match key.code {
-                        KeyCode::Char('c') => return Ok(Some(Exit::Quit)),
-                        KeyCode::Char('l') => self.toggle_languages(),
-                        _ => {}
-                    }
-                    return Ok(None);
-                }
-                key.code
-            }
+            Event::Key(key) if key.kind == KeyEventKind::Press => match self.popups.key(key) {
+                Shared::Quit => return Ok(Some(Exit::Quit)),
+                Shared::Used => return Ok(None),
+                Shared::Screen(key) => key.code,
+            },
+            // The mouse is ignored while a popup is open.
+            Event::Mouse(_) if self.popups.is_open() => return Ok(None),
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => KeyCode::Down,
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => KeyCode::Up,
             // Left click: previous chapter, right click: next one, like h and l.
@@ -436,13 +408,8 @@ impl Reader<'_> {
         let half = i64::from(self.view / 2);
         match code {
             KeyCode::Char('q') => return Ok(Some(Exit::Quit)),
-            // Back to the search from anywhere, unless it erases a typed chapter number.
-            KeyCode::Backspace if !self.typing() => return Ok(Some(Exit::Back)),
+            KeyCode::Backspace | KeyCode::Esc | KeyCode::F(1) => return Ok(Some(Exit::Chapters)),
             KeyCode::Char('H') => self.bar = !self.bar,
-            _ if self.overlay.is_some() => self.handle_overlay(code)?,
-            KeyCode::Esc => return Ok(Some(Exit::Back)),
-            KeyCode::F(1) => self.overlay = Some(chapter_list(self.current)),
-            KeyCode::Char('?') => self.overlay = Some(Overlay::Help),
             KeyCode::Char('j') | KeyCode::Down => self.pending += step,
             KeyCode::Char('k') | KeyCode::Up => self.pending -= step,
             KeyCode::Char('d') => self.pending += half,
@@ -457,84 +424,9 @@ impl Reader<'_> {
         }
         Ok(None)
     }
-
-    fn handle_overlay(&mut self, code: KeyCode) -> Result<()> {
-        if let Some(Overlay::Languages(list)) = &mut self.overlay {
-            if !crate::pick_language(list, code) {
-                self.toggle_languages();
-            }
-            return Ok(());
-        }
-        let Some(Overlay::Chapters { list, filter }) = &mut self.overlay else {
-            // Any key closes the help.
-            self.overlay = None;
-            return Ok(());
-        };
-        match code {
-            KeyCode::Char(digit) if digit.is_ascii_digit() => {
-                filter.push(digit);
-                list.select(Some(0));
-            }
-            KeyCode::Backspace => {
-                filter.pop();
-                list.select(Some(0));
-            }
-            KeyCode::Char('j') | KeyCode::Down => list.select_next(),
-            KeyCode::Char('k') | KeyCode::Up => list.select_previous(),
-            KeyCode::Enter => {
-                let shown = matching(&self.chapters, filter);
-                // ListState only clamps its selection when rendered.
-                let selected = list
-                    .selected()
-                    .unwrap_or(0)
-                    .min(shown.len().saturating_sub(1));
-                let Some(&chapter) = shown.get(selected) else {
-                    return Ok(());
-                };
-                self.overlay = None;
-                self.open(chapter)?;
-            }
-            KeyCode::F(1) | KeyCode::Esc => {
-                self.overlay = None;
-                // Closed without choosing: read the current chapter.
-                if self.pages.is_empty() {
-                    self.load()?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    /// Opens or closes the language list. Closed before a chapter is chosen, it gives the chapter list back.
-    fn toggle_languages(&mut self) {
-        self.overlay = match self.overlay {
-            Some(Overlay::Languages(_)) if self.pages.is_empty() => Some(chapter_list(0)),
-            Some(Overlay::Languages(_)) => None,
-            _ => Some(Overlay::Languages(crate::language_list())),
-        };
-    }
-
-    /// A chapter number is being typed in the chapter list.
-    fn typing(&self) -> bool {
-        matches!(&self.overlay, Some(Overlay::Chapters { filter, .. }) if !filter.is_empty())
-    }
 }
 
 fn draw_message(frame: &mut Frame, area: Rect, text: &str) {
     let text = Paragraph::new(text).centered().wrap(Wrap { trim: true });
     frame.render_widget(text, area.centered_vertically(Constraint::Length(3)));
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn chapter_filter() {
-        let chapters = [1, 2, 12, 21, 120].map(|number| Chapter { number, pages: 1 });
-        assert_eq!(matching(&chapters, ""), [0, 1, 2, 3, 4]);
-        assert_eq!(matching(&chapters, "12"), [2, 4]);
-        assert!(matching(&chapters, "9").is_empty());
-    }
 }

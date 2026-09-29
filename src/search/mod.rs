@@ -1,4 +1,4 @@
-//! The search screen: what you see and the keys (live search, list or tiles, version picker).
+//! The search screen: what you see and the keys (live search, list or tiles).
 
 mod cover_loader;
 mod results_loader;
@@ -7,7 +7,7 @@ mod tiles;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Position};
 use ratatui::style::{Modifier, Stylize};
 use ratatui::widgets::{Block, List, ListState, Paragraph};
@@ -18,26 +18,20 @@ use self::tiles::Tiles;
 use crate::Result;
 use crate::i18n::{t, tf};
 use crate::kitty::{self, Geo, Placement};
-use crate::sources::anime_sama::{self, Chapter, Link};
+use crate::sources::anime_sama::Link;
+use crate::ui::{Go, Popups, Shared};
 
 /// Time without typing before searching.
 const DEBOUNCE: Duration = Duration::from_millis(300);
 /// One letter would list the whole catalogue.
 const MIN_CHARS: usize = 2;
 
-/// What to fetch once the loading message is on screen.
-enum Todo {
-    Versions { slug: String, name: String },
-    Chapters { slug: String, path: String },
-}
-
-/// The scan versions of the chosen work, when it has several.
-struct Versions {
-    slug: String,
-    name: String,
-    links: Vec<Link>,
-    list: ListState,
-}
+const HELP: &[(&str, &str)] = &[
+    ("↑ ↓ ← →", "help.select"),
+    ("Enter", "help.open"),
+    ("Ctrl+T", "help.tiles"),
+    ("Esc", "help.quit"),
+];
 
 pub struct Search {
     query: String,
@@ -49,11 +43,8 @@ pub struct Search {
     /// Query whose results are on screen.
     shown: String,
     list: ListState,
-    versions: Option<Versions>,
-    todo: Option<Todo>,
     status: String,
-    help: bool,
-    languages: Option<ListState>,
+    popups: Popups,
     /// Results as cover tiles instead of a list; Ctrl+T switches.
     grid: bool,
     tiles: Tiles,
@@ -71,11 +62,8 @@ impl Search {
             cache: HashMap::new(),
             shown: String::new(),
             list: ListState::default(),
-            versions: None,
-            todo: None,
             status: String::new(),
-            help: false,
-            languages: None,
+            popups: Popups::default(),
             grid: false,
             tiles: Tiles::new(),
             geo: None,
@@ -83,11 +71,9 @@ impl Search {
         }
     }
 
-    /// Runs until a work is opened (its API title and chapters) or the user quits (`None`).
-    pub fn run(
-        &mut self,
-        terminal: &mut DefaultTerminal,
-    ) -> Result<Option<(String, Vec<Chapter>)>> {
+    /// Runs until a work is chosen (`Next`) or the user quits. The query and the results stay
+    /// for the next visit.
+    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<Go<Link>> {
         // What kitty shows now.
         let mut shown = Vec::new();
         loop {
@@ -103,23 +89,15 @@ impl Search {
                 self.tiles.reset()?;
             }
             kitty::frame(terminal, &mut shown, |frame| self.draw(frame))?;
-            if let Some(todo) = self.todo.take() {
-                match self.fetch(todo) {
-                    Ok(Some(work)) => {
-                        // The reader draws its own images: take the covers off kitty.
-                        self.tiles.reset()?;
-                        return Ok(Some(work));
-                    }
-                    Ok(None) => {}
-                    Err(e) => self.status = tf("error", &[("e", &e)]),
-                }
-                continue;
-            }
             let mut timeout = Duration::from_millis(50);
             while event::poll(timeout)? {
-                if self.handle(event::read()?) {
+                if let Event::Key(key) = event::read()?
+                    && key.kind == KeyEventKind::Press
+                    && let Some(go) = self.handle(key)
+                {
+                    // The next screens draw their own images: take the covers off kitty.
                     self.tiles.reset()?;
-                    return Ok(None);
+                    return Ok(go);
                 }
                 timeout = Duration::ZERO;
             }
@@ -169,72 +147,16 @@ impl Search {
         }
     }
 
-    fn fetch(&mut self, todo: Todo) -> Result<Option<(String, Vec<Chapter>)>> {
-        match todo {
-            Todo::Versions { slug, name } => {
-                let mut links = anime_sama::versions(&slug)?;
-                match links.len() {
-                    0 => self.status = t("search.no_scans").into(),
-                    1 => {
-                        let path = links.remove(0).path;
-                        self.todo = Some(Todo::Chapters { slug, path });
-                    }
-                    _ => {
-                        self.status.clear();
-                        let list = ListState::default().with_selected(Some(0));
-                        self.versions = Some(Versions {
-                            slug,
-                            name,
-                            links,
-                            list,
-                        });
-                    }
-                }
-                Ok(None)
-            }
-            Todo::Chapters { slug, path } => {
-                let title = anime_sama::title(&slug, &path)?;
-                let chapters = anime_sama::chapters(&title)?;
-                self.status.clear();
-                Ok(Some((title, chapters)))
-            }
-        }
-    }
-
-    /// Returns true to quit.
-    fn handle(&mut self, event: Event) -> bool {
-        let Event::Key(key) = event else { return false };
-        if key.kind != KeyEventKind::Press {
-            return false;
-        }
+    /// Returns where to go, if the key leaves this screen.
+    fn handle(&mut self, key: KeyEvent) -> Option<Go<Link>> {
+        let key = match self.popups.key(key) {
+            Shared::Quit => return Some(Go::Quit),
+            Shared::Used => return None,
+            Shared::Screen(key) => key,
+        };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        if ctrl && key.code == KeyCode::Char('c') {
-            return true;
-        }
-        if ctrl && key.code == KeyCode::Char('l') {
-            self.languages = match self.languages {
-                Some(_) => None,
-                None => Some(crate::language_list()),
-            };
-            return false;
-        }
-        if let Some(list) = &mut self.languages {
-            if !crate::pick_language(list, key.code) {
-                self.languages = None;
-            }
-            return false;
-        }
-        if self.help {
-            // Any key closes the help.
-            self.help = false;
-            return false;
-        }
-        if self.versions.is_some() {
-            self.handle_versions(key.code);
-            return false;
-        }
         match key.code {
-            KeyCode::Esc => return true,
+            KeyCode::Esc => return Some(Go::Quit),
             KeyCode::Char('t') if ctrl => self.grid = !self.grid,
             KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
                 if self.grid && self.geo.is_some() =>
@@ -250,63 +172,24 @@ impl Search {
             KeyCode::Enter => {
                 let results = self.cache.get(&self.shown);
                 if let Some(work) = self.list.selected().and_then(|i| results?.get(i)) {
-                    let (slug, name) = (work.path.clone(), work.name.clone());
-                    self.todo = Some(Todo::Versions { slug, name });
-                    self.status = t("loading").into();
+                    return Some(Go::Next(work.clone()));
                 }
             }
             KeyCode::Backspace => {
                 self.query.pop();
                 self.edited();
             }
-            KeyCode::Char('?') => self.help = true,
             KeyCode::Char(c) if !ctrl => {
                 self.query.push(c);
                 self.edited();
             }
             _ => {}
         }
-        false
-    }
-
-    fn handle_versions(&mut self, code: KeyCode) {
-        let Some(versions) = &mut self.versions else {
-            return;
-        };
-        match code {
-            KeyCode::Char('j') | KeyCode::Down => versions.list.select_next(),
-            KeyCode::Char('k') | KeyCode::Up => versions.list.select_previous(),
-            KeyCode::Enter => {
-                let chosen = versions.list.selected().and_then(|i| versions.links.get(i));
-                if let Some(version) = chosen {
-                    let (slug, path) = (versions.slug.clone(), version.path.clone());
-                    self.todo = Some(Todo::Chapters { slug, path });
-                    self.status = t("loading").into();
-                    self.versions = None;
-                }
-            }
-            KeyCode::Esc | KeyCode::Backspace => self.versions = None,
-            _ => {}
-        }
+        None
     }
 
     /// Draws the screen and returns where kitty must draw the covers.
     fn draw(&mut self, frame: &mut Frame) -> Vec<Placement> {
-        if let Some(versions) = &mut self.versions {
-            // A small box on a blank screen: "<work> · Version" and the choices.
-            let title = format!("{} · {}", versions.name, t("search.version"));
-            let items = versions
-                .links
-                .iter()
-                .map(|link| link.name.clone())
-                .collect();
-            crate::popup(frame, &title, items, &mut versions.list);
-            if let Some(list) = &mut self.languages {
-                crate::draw_languages(frame, list);
-            }
-            return Vec::new();
-        }
-
         let [input, results, status] = Layout::vertical([
             Constraint::Length(3),
             Constraint::Fill(1),
@@ -347,14 +230,12 @@ impl Search {
         };
         frame.render_widget(Paragraph::new(hint).dim(), status);
 
-        if self.help {
-            crate::draw_help(frame, "search.help");
-        }
-        if let Some(list) = &mut self.languages {
-            crate::draw_languages(frame, list);
-        }
+        self.popups.draw(frame, HELP);
         // Covers are drawn above the text: hide them while a popup is open.
-        let popup = self.help || self.languages.is_some();
-        if popup { Vec::new() } else { placements }
+        if self.popups.is_open() {
+            Vec::new()
+        } else {
+            placements
+        }
     }
 }

@@ -186,7 +186,12 @@ fn fetch(cache: &Cache, title: &str, chapter: u32, page: u32) -> Result<Arc<Vec<
     if let Some(bytes) = cache.lock().ok().and_then(|cache| cache.get(&key).cloned()) {
         return Ok(bytes);
     }
-    let bytes = Arc::new(anime_sama::page(title, chapter, page).map_err(|e| e.to_string())?);
+    // A panic while downloading (an odd answer from the site) only fails this page, instead of
+    // stopping the downloader and leaving every page loading forever.
+    let bytes = catch_unwind(|| anime_sama::page(title, chapter, page))
+        .unwrap_or_else(|_| Err("panic".into()))
+        .map_err(|e| e.to_string())?;
+    let bytes = Arc::new(bytes);
     if let Ok(mut cache) = cache.lock() {
         cache.insert(key, bytes.clone());
     }

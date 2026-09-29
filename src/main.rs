@@ -1,20 +1,26 @@
-//! Entry point: sets up the terminal, then goes back and forth between search and reading.
+//! Entry point: sets up the terminal, then chains the screens:
+//! search → versions → chapters → reader, each one able to go back to the previous one.
 
+mod chapters;
 mod i18n;
 mod kitty;
 mod reader;
 mod search;
 mod sources;
+mod ui;
+mod versions;
 
 use std::io::{IsTerminal, stdout};
 use std::thread;
 
-use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture, KeyCode};
+use ratatui::DefaultTerminal;
+use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use ratatui::crossterm::execute;
-use ratatui::layout::Constraint;
-use ratatui::style::Modifier;
-use ratatui::widgets::{Block, Clear, List, ListState};
-use ratatui::{DefaultTerminal, Frame};
+
+use crate::i18n::t;
+use crate::reader::page_loader::PageLoader;
+use crate::sources::anime_sama;
+use crate::ui::Go;
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
@@ -44,64 +50,67 @@ fn main() {
     }
 }
 
+/// The screens, one after the other. `continue 'screen` goes back to that screen.
 fn run(terminal: &mut DefaultTerminal) -> Result<()> {
     let mut search = search::Search::new();
-    let mut loader = reader::page_loader::PageLoader::spawn();
-    while let Some((title, chapters)) = search.run(terminal)? {
-        if reader::run(terminal, &mut loader, title, chapters)? == reader::Exit::Quit {
-            break;
+    let mut loader = PageLoader::spawn();
+    'search: loop {
+        let work = match search.run(terminal)? {
+            Go::Next(work) => work,
+            Go::Back | Go::Quit => return Ok(()),
+        };
+
+        let slug = work.path.clone();
+        let versions = match ui::loading(terminal, move || {
+            let versions = anime_sama::versions(&slug).map_err(|e| e.to_string())?;
+            if versions.is_empty() {
+                return Err(t("search.no_scans").to_string());
+            }
+            Ok(versions)
+        })? {
+            Go::Next(versions) => versions,
+            Go::Back => continue 'search,
+            Go::Quit => return Ok(()),
+        };
+        // With a single version there is no version screen: going back goes to the search.
+        let single = versions.len() == 1;
+        let mut version = 0;
+
+        'versions: loop {
+            if !single {
+                version = match versions::run(terminal, &work.name, &versions, version)? {
+                    Go::Next(version) => version,
+                    Go::Back => continue 'search,
+                    Go::Quit => return Ok(()),
+                };
+            }
+
+            let (slug, path) = (work.path.clone(), versions[version].path.clone());
+            let (title, chapters) = match ui::loading(terminal, move || {
+                let title = anime_sama::title(&slug, &path).map_err(|e| e.to_string())?;
+                let chapters = anime_sama::chapters(&title).map_err(|e| e.to_string())?;
+                Ok((title, chapters))
+            })? {
+                Go::Next(loaded) => loaded,
+                Go::Back if single => continue 'search,
+                Go::Back => continue 'versions,
+                Go::Quit => return Ok(()),
+            };
+
+            let mut chapter = 0;
+            loop {
+                chapter = match chapters::run(terminal, &work.name, &chapters, chapter)? {
+                    Go::Next(chapter) => chapter,
+                    Go::Back if single => continue 'search,
+                    Go::Back => continue 'versions,
+                    Go::Quit => return Ok(()),
+                };
+                // Back from the reader: the chapter list, on the chapter being read.
+                chapter = match reader::run(terminal, &mut loader, &title, &chapters, chapter)? {
+                    Some(chapter) => chapter,
+                    None => return Ok(()),
+                };
+            }
         }
     }
-    Ok(())
-}
-
-/// The language list opened with Ctrl+L, on the current language.
-fn language_list() -> ListState {
-    ListState::default().with_selected(Some(i18n::current()))
-}
-
-/// A key in the language list. Returns false once the list is closed.
-fn pick_language(list: &mut ListState, code: KeyCode) -> bool {
-    match code {
-        KeyCode::Char('j') | KeyCode::Down => list.select_next(),
-        KeyCode::Char('k') | KeyCode::Up => list.select_previous(),
-        KeyCode::Enter => {
-            i18n::set(list.selected().unwrap_or(0));
-            return false;
-        }
-        KeyCode::Esc => return false,
-        _ => {}
-    }
-    true
-}
-
-/// The help popup: the lines of the locale text `key`.
-fn draw_help(frame: &mut Frame, key: &'static str) {
-    let lines = i18n::t(key).lines().map(String::from).collect();
-    popup(frame, i18n::t("help"), lines, &mut ListState::default());
-}
-
-fn draw_languages(frame: &mut Frame, list: &mut ListState) {
-    let names = i18n::names().into_iter().map(String::from).collect();
-    popup(frame, i18n::t("languages"), names, list);
-}
-
-/// A bordered list in the middle of the screen: versions, chapters, help, languages.
-fn popup(frame: &mut Frame, title: &str, items: Vec<String>, state: &mut ListState) {
-    let longest = items
-        .iter()
-        .map(String::as_str)
-        .chain([title])
-        .map(|text| text.chars().count())
-        .max();
-    let width = longest.unwrap_or(0) as u16 + 4;
-    let height = (items.len() as u16 + 2).min(frame.area().height * 4 / 5);
-    let area = frame
-        .area()
-        .centered(Constraint::Length(width), Constraint::Length(height));
-    let list = List::new(items)
-        .block(Block::bordered().title(format!(" {title} ")))
-        .highlight_style(Modifier::REVERSED);
-    frame.render_widget(Clear, area);
-    frame.render_stateful_widget(list, area, state);
 }

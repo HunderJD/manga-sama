@@ -1,4 +1,4 @@
-//! Anime-Sama client.
+//! Talks to the Anime-Sama website: search, scan versions, chapter lists, page and cover images.
 //!
 //! Search, scan versions and work titles are read from the site's HTML: Anime-Sama has no JSON API
 //! for them (its own JS only gets an HTML fragment for the search bar). Only the chapter list
@@ -20,7 +20,7 @@ const BASE: &str = "https://anime-sama.to";
 static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
     ureq::Agent::config_builder()
         .user_agent(concat!("manga-sama/", env!("CARGO_PKG_VERSION")))
-        // Long enough for a 3.6 MB page on a slow connection.
+        // Long enough for the biggest pages (over 10 MB) on a slow connection.
         .timeout_global(Some(Duration::from_secs(60)))
         .build()
         .into()
@@ -55,61 +55,64 @@ fn get(url: &str) -> Result<ureq::Body> {
     let ms = sent.elapsed().as_millis();
     match &response {
         Ok(response) => log(&format!("{} {ms:>4} ms {url}", response.status().as_u16())),
-        Err(e) => log(&format!("ERR {ms:>4} ms {url} : {e}")),
+        Err(e) => log(&format!("ERR {ms:>4} ms {url}: {e}")),
     }
-    Ok(response.map_err(|e| format!("{url} : {e}"))?.into_body())
+    Ok(response.map_err(|e| format!("{url}: {e}"))?.into_body())
 }
 
-fn encode(s: &str) -> String {
+fn get_text(url: &str) -> Result<String> {
+    Ok(get(url)?.read_to_string()?)
+}
+
+/// Some pages weigh more than the 10 MB ureq accepts by default.
+const MAX_IMAGE: u64 = 100 * 1024 * 1024;
+
+fn get_bytes(url: &str) -> Result<Vec<u8>> {
+    Ok(get(url)?
+        .into_with_config()
+        .limit(MAX_IMAGE)
+        .read_to_vec()?)
+}
+
+fn url_encode(s: &str) -> String {
     utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
 }
 
 pub fn search(query: &str) -> Result<Vec<Link>> {
     let url = format!(
         "{BASE}/catalogue/?search={}&type%5B%5D=Scans",
-        encode(query)
+        url_encode(query)
     );
-    Ok(parse_search(&get(&url)?.read_to_string()?))
+    Ok(parse_search(&get_text(&url)?))
 }
 
 pub fn versions(slug: &str) -> Result<Vec<Link>> {
     let url = format!("{BASE}/catalogue/{slug}/");
-    Ok(parse_versions(&get(&url)?.read_to_string()?))
+    Ok(parse_versions(&get_text(&url)?))
 }
 
 /// The work's name as the chapter API expects it.
 pub fn title(slug: &str, path: &str) -> Result<String> {
     let url = format!("{BASE}/catalogue/{slug}/{path}/");
-    parse_title(&get(&url)?.read_to_string()?)
-        .ok_or_else(|| tf("api.no_title", &[("url", &url)]).into())
+    parse_title(&get_text(&url)?).ok_or_else(|| tf("anime_sama.no_title", &[("url", &url)]).into())
 }
 
 pub fn chapters(title: &str) -> Result<Vec<Chapter>> {
     let url = format!(
         "{BASE}/s2/scans/get_nb_chap_et_img.php?oeuvre={}",
-        encode(title)
+        url_encode(title)
     );
-    parse_chapters(&get(&url)?.read_to_string()?)
+    parse_chapters(&get_text(&url)?)
 }
 
 /// A search result's thumbnail. They live on jsdelivr (Anime-Sama's image repository), not on the site.
 pub fn cover(url: &str) -> Result<Vec<u8>> {
-    bytes(url)
+    get_bytes(url)
 }
 
 pub fn page(title: &str, chapter: u32, page: u32) -> Result<Vec<u8>> {
-    let url = format!("{BASE}/s2/scans/{}/{chapter}/{page}.jpg", encode(title));
-    bytes(&url)
-}
-
-/// Some pages weigh more than the 10 MB ureq accepts by default.
-const MAX_IMAGE: u64 = 100 * 1024 * 1024;
-
-fn bytes(url: &str) -> Result<Vec<u8>> {
-    Ok(get(url)?
-        .into_with_config()
-        .limit(MAX_IMAGE)
-        .read_to_vec()?)
+    let url = format!("{BASE}/s2/scans/{}/{chapter}/{page}.jpg", url_encode(title));
+    get_bytes(&url)
 }
 
 fn parse_search(html: &str) -> Vec<Link> {
@@ -149,12 +152,13 @@ fn parse_versions(html: &str) -> Vec<Link> {
                 cover: None,
             })
         })
+        // The site leaves an example `panneauScan("nom", "url")` call in a comment.
         .filter(|v| (v.name.as_str(), v.path.as_str()) != ("nom", "url"))
         .collect()
 }
 
-// Not trimmed and HTML-escaped on purpose: the site sends `innerHTML` as is, and
-// "Jujutsu Kaisen Modulo " only exists with its trailing space.
+/// Kept as is (not trimmed, still HTML-escaped) on purpose: the site sends `innerHTML` as is,
+/// and "Jujutsu Kaisen Modulo " only exists with its trailing space.
 fn parse_title(html: &str) -> Option<String> {
     let doc = Html::parse_document(html);
     let title = Selector::parse("#titreOeuvre").unwrap();
@@ -172,7 +176,7 @@ fn parse_chapters(json: &str) -> Result<Vec<Chapter>> {
         .map(|(number, pages)| Chapter { number, pages })
         .collect();
     if chapters.is_empty() {
-        return Err(tf("api.bad_chapters", &[("json", &json)]).into());
+        return Err(tf("anime_sama.bad_chapters", &[("json", &json)]).into());
     }
     Ok(chapters)
 }
@@ -229,7 +233,7 @@ mod tests {
     fn work_title() {
         let html = r#"<h3 id="titreOeuvre" class="uppercase">Jujutsu Kaisen Modulo </h3>"#;
         assert_eq!(parse_title(html).as_deref(), Some("Jujutsu Kaisen Modulo "));
-        assert_eq!(parse_title("<h3>rien</h3>"), None);
+        assert_eq!(parse_title("<h3>nothing</h3>"), None);
     }
 
     #[test]
@@ -249,20 +253,20 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "réseau"]
+    #[ignore = "network"]
     fn full_walk() {
         let work = search("berserk")
             .unwrap()
             .into_iter()
             .find(|w| w.path == "berserk")
-            .expect("berserk trouvé");
+            .expect("berserk found");
         let thumbnail = cover(work.cover.as_deref().expect("a cover")).unwrap();
         image::load_from_memory(&thumbnail).unwrap();
         let version = versions(&work.path)
             .unwrap()
             .into_iter()
             .next()
-            .expect("une version");
+            .expect("a version");
         let title = title(&work.path, &version.path).unwrap();
         let chapters = chapters(&title).unwrap();
         let bytes = page(&title, chapters[0].number, 1).unwrap();

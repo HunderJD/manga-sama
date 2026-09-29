@@ -1,4 +1,4 @@
-//! UI texts, from the JSON files of `locales/` built into the binary. Ctrl+L lists the languages.
+//! The app's texts in English and French, from `locales/*.json` built into the binary.
 
 use std::collections::HashMap;
 use std::fmt::Display;

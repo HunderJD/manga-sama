@@ -1,5 +1,5 @@
-//! The few commands of the kitty graphics protocol the app needs:
-//! <https://sw.kovidgoyal.net/kitty/graphics-protocol/>
+//! Draws images in the terminal with the kitty graphics protocol and reads its size; used by both screens.
+//! Spec: <https://sw.kovidgoyal.net/kitty/graphics-protocol/>
 
 use std::io::{Write, stdout};
 use std::os::unix::ffi::OsStrExt;
@@ -14,7 +14,7 @@ use ratatui::{DefaultTerminal, Frame};
 
 use crate::Result;
 use crate::i18n::t;
-use crate::pages::Image;
+use crate::reader::page_loader::Image;
 
 /// Terminal size in cells, and the size of a cell in pixels.
 #[derive(Clone, Copy, PartialEq)]
@@ -33,7 +33,7 @@ impl Geo {
             || size.width < size.columns
             || size.height < size.rows
         {
-            return Err(t("reader.no_pixels").into());
+            return Err(t("kitty.no_pixels").into());
         }
         Ok(Geo {
             cols: size.columns,
@@ -51,8 +51,10 @@ pub struct Placement {
     /// Cell where the image starts.
     pub x: u16,
     pub y: u16,
+    /// Pixels right of the left of cell `x` where it really starts: narrow pages are centered.
+    pub x_offset: u32,
     /// Pixels below the top of cell `y` where it really starts: pages scroll by the pixel, cells don't.
-    pub offset: u32,
+    pub y_offset: u32,
     /// Source rectangle in the image, in pixels: `src_w` × `src_h` from row `src_y`.
     pub src_y: u32,
     pub src_w: u32,
@@ -60,7 +62,6 @@ pub struct Placement {
 }
 
 /// An image stored in kitty: its id and its size in pixels.
-#[derive(Clone, Copy)]
 pub struct Stored {
     pub id: u32,
     pub width: u32,
@@ -72,12 +73,16 @@ fn command(keys: &str) -> String {
     format!("\x1b_Gq=2,{keys}\x1b\\")
 }
 
-/// Stores `image` in kitty, without showing it. The pixels go through a temporary file that
-/// kitty deletes after reading (`t=t`), so megabytes never go through the terminal.
+/// Name prefix of this process's transfer files. Kitty only deletes a file it read if its path
+/// contains "tty-graphics-protocol".
+fn temp_prefix() -> String {
+    format!("tty-graphics-protocol-manga-sama-{}-", std::process::id())
+}
+
 /// Deletes the transfer files kitty never read (it deletes the ones it reads), e.g. when the app
 /// quits before kitty got to them.
 pub fn cleanup() {
-    let prefix = format!("tty-graphics-protocol-manga-sama-{}-", std::process::id());
+    let prefix = temp_prefix();
     let Ok(files) = std::fs::read_dir(std::env::temp_dir()) else {
         return;
     };
@@ -88,15 +93,13 @@ pub fn cleanup() {
     }
 }
 
+/// Stores `image` in kitty, without showing it. The pixels go through a temporary file that
+/// kitty deletes after reading (`t=t`), so megabytes never go through the terminal.
 pub fn transmit(image: &Image) -> Result<Stored> {
     // One counter for the whole app, so covers and pages never share an id.
     static NEXT_ID: AtomicU32 = AtomicU32::new(1);
     let id = NEXT_ID.fetch_add(1, Relaxed);
-    let name = format!(
-        "tty-graphics-protocol-manga-sama-{}-{id}",
-        std::process::id()
-    );
-    let path = std::env::temp_dir().join(name);
+    let path = std::env::temp_dir().join(format!("{}{id}", temp_prefix()));
     std::fs::write(&path, &image.rgb)?;
     let path = STANDARD.encode(path.as_os_str().as_bytes());
     let (width, height) = (image.width, image.height);
@@ -108,17 +111,17 @@ pub fn transmit(image: &Image) -> Result<Stored> {
 
 /// Shows part of a stored image. The placement id is always 1, so placing an image again
 /// moves it instead of adding a copy. `C=1`: the cursor stays where it is.
-pub fn place(p: &Placement) -> String {
+fn place(p: &Placement) -> String {
     let cursor = format!("\x1b[{};{}H", p.y + 1, p.x + 1);
     let keys = format!(
-        "a=p,i={},p=1,x=0,y={},w={},h={},Y={},C=1",
-        p.id, p.src_y, p.src_w, p.src_h, p.offset
+        "a=p,i={},p=1,x=0,y={},w={},h={},X={},Y={},C=1",
+        p.id, p.src_y, p.src_w, p.src_h, p.x_offset, p.y_offset
     );
     cursor + &command(&keys)
 }
 
 /// Hides image `id`; kitty keeps it stored.
-pub fn hide(id: u32) -> String {
+fn hide(id: u32) -> String {
     command(&format!("a=d,d=i,i={id}"))
 }
 
@@ -139,7 +142,10 @@ fn update(shown: &mut Vec<Placement>, placements: Vec<Placement>) -> Result<()> 
         .map(|old| hide(old.id));
     let moved = placements.iter().filter(|p| !shown.contains(p)).map(place);
     let commands: String = gone.chain(moved).collect();
-    send(&commands)?;
+    if !commands.is_empty() {
+        // Placing moves the cursor: save it and put it back where ratatui left it (search box).
+        send(&format!("\x1b7{commands}\x1b8"))?;
+    }
     *shown = placements;
     Ok(())
 }
@@ -160,7 +166,7 @@ pub fn frame(
 }
 
 /// Writes commands in one go, so kitty never shows a half-updated frame.
-pub fn send(commands: &str) -> Result<()> {
+fn send(commands: &str) -> Result<()> {
     let mut out = stdout().lock();
     out.write_all(commands.as_bytes())?;
     out.flush()?;

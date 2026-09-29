@@ -35,11 +35,13 @@ pub fn set(index: usize) {
     CURRENT.store(index.min(LOCALES.len() - 1), Relaxed);
 }
 
-/// The text for `key`, or the key itself if it is missing.
+/// The text for `key`. A key missing from the locale files is a bug: it panics right away
+/// instead of showing the key on screen.
 pub fn t(key: &'static str) -> &'static str {
-    TEXTS[CURRENT.load(Relaxed)]
-        .get(key)
-        .map_or(key, String::as_str)
+    match TEXTS[CURRENT.load(Relaxed)].get(key) {
+        Some(text) => text,
+        None => panic!("missing text key: {key}"),
+    }
 }
 
 /// `t` with its `{name}` placeholders filled.

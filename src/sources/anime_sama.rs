@@ -4,9 +4,9 @@
 //! for them (its own JS only gets an HTML fragment for the search bar). Only the chapter list
 //! (`get_nb_chap_et_img.php`) is JSON, and pages are plain image files.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::IsTerminal;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
@@ -27,6 +27,7 @@ static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
 });
 
 /// A search result (`path` = slug) or a scan version (`path` = "scan/vf").
+#[derive(Clone)]
 pub struct Link {
     pub name: String,
     pub path: String,
@@ -86,15 +87,35 @@ pub fn search(query: &str) -> Result<Vec<Link>> {
     Ok(parse_search(&get_text(&url)?))
 }
 
+/// Answers already fetched while the app runs (a work's versions, title and chapter list), by URL:
+/// going back and forth between screens never asks the site twice. Gone when the app quits.
+static SESSION: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Default::default);
+
+fn get_text_cached(url: &str) -> Result<String> {
+    if let Some(text) = SESSION
+        .lock()
+        .ok()
+        .and_then(|session| session.get(url).cloned())
+    {
+        return Ok(text);
+    }
+    let text = get_text(url)?;
+    if let Ok(mut session) = SESSION.lock() {
+        session.insert(url.to_string(), text.clone());
+    }
+    Ok(text)
+}
+
 pub fn versions(slug: &str) -> Result<Vec<Link>> {
     let url = format!("{BASE}/catalogue/{slug}/");
-    Ok(parse_versions(&get_text(&url)?))
+    Ok(parse_versions(&get_text_cached(&url)?))
 }
 
 /// The work's name as the chapter API expects it.
 pub fn title(slug: &str, path: &str) -> Result<String> {
     let url = format!("{BASE}/catalogue/{slug}/{path}/");
-    parse_title(&get_text(&url)?).ok_or_else(|| tf("anime_sama.no_title", &[("url", &url)]).into())
+    parse_title(&get_text_cached(&url)?)
+        .ok_or_else(|| tf("anime_sama.no_title", &[("url", &url)]).into())
 }
 
 pub fn chapters(title: &str) -> Result<Vec<Chapter>> {
@@ -102,7 +123,7 @@ pub fn chapters(title: &str) -> Result<Vec<Chapter>> {
         "{BASE}/s2/scans/get_nb_chap_et_img.php?oeuvre={}",
         url_encode(title)
     );
-    parse_chapters(&get_text(&url)?)
+    parse_chapters(&get_text_cached(&url)?)
 }
 
 /// A search result's thumbnail. They live on jsdelivr (Anime-Sama's image repository), not on the site.
@@ -184,6 +205,16 @@ fn parse_chapters(json: &str) -> Result<Vec<Chapter>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_cache_answers_without_the_site() {
+        let url = "https://example.invalid/never-fetched";
+        SESSION
+            .lock()
+            .unwrap()
+            .insert(url.to_string(), "cached".to_string());
+        assert_eq!(get_text_cached(url).unwrap(), "cached");
+    }
 
     #[test]
     fn search_results() {

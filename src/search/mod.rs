@@ -1,6 +1,10 @@
+//! The search screen: what you see and the keys (live search, list or tiles, version picker).
+
+mod cover_loader;
+mod results_loader;
+mod tiles;
+
 use std::collections::HashMap;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -9,22 +13,17 @@ use ratatui::style::{Modifier, Stylize};
 use ratatui::widgets::{Block, List, ListState, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
+use self::results_loader::{Found, ResultsLoader};
+use self::tiles::Tiles;
 use crate::Result;
-use crate::api::{self, Chapter, Link};
 use crate::i18n::{t, tf};
 use crate::kitty::{self, Geo, Placement};
-use crate::tiles::{self, Tiles};
+use crate::sources::anime_sama::{self, Chapter, Link};
 
 /// Time without typing before searching.
-const DEBOUNCE: Duration = Duration::from_millis(500);
+const DEBOUNCE: Duration = Duration::from_millis(300);
 /// One letter would list the whole catalogue.
 const MIN_CHARS: usize = 2;
-
-/// A query and its results, from the search thread.
-struct Found {
-    query: String,
-    result: Result<Vec<Link>, String>,
-}
 
 /// What to fetch once the loading message is on screen.
 enum Todo {
@@ -60,15 +59,11 @@ pub struct Search {
     tiles: Tiles,
     /// Terminal size; `None` when it gives no pixel size, then there are no covers.
     geo: Option<Geo>,
-    queries: Sender<String>,
-    found: Receiver<Found>,
+    results: ResultsLoader,
 }
 
 impl Search {
     pub fn new() -> Self {
-        let (queries, query_rx) = mpsc::channel();
-        let (found_tx, found) = mpsc::channel();
-        thread::spawn(move || search(query_rx, found_tx));
         Search {
             query: String::new(),
             typed_at: Instant::now(),
@@ -84,8 +79,7 @@ impl Search {
             grid: false,
             tiles: Tiles::new(),
             geo: None,
-            queries,
-            found,
+            results: ResultsLoader::spawn(),
         }
     }
 
@@ -97,7 +91,7 @@ impl Search {
         // What kitty shows now.
         let mut shown = Vec::new();
         loop {
-            while let Ok(found) = self.found.try_recv() {
+            while let Ok(found) = self.results.found.try_recv() {
                 self.receive(found);
             }
             self.ask();
@@ -161,13 +155,14 @@ impl Search {
             return;
         }
         self.asked = query.to_string();
-        // Fails only if the search thread is gone; the status then stays on "searching".
-        let _ = self.queries.send(self.asked.clone());
+        self.results.search(&self.asked);
     }
 
     fn edited(&mut self) {
         self.typed_at = Instant::now();
         self.status.clear();
+        // After a failed search, typing the same query again must send it again.
+        self.asked.clear();
         let query = self.query.trim().to_string();
         if self.cache.contains_key(&query) {
             self.show(query);
@@ -177,7 +172,7 @@ impl Search {
     fn fetch(&mut self, todo: Todo) -> Result<Option<(String, Vec<Chapter>)>> {
         match todo {
             Todo::Versions { slug, name } => {
-                let mut links = api::versions(&slug)?;
+                let mut links = anime_sama::versions(&slug)?;
                 match links.len() {
                     0 => self.status = t("search.no_scans").into(),
                     1 => {
@@ -198,8 +193,8 @@ impl Search {
                 Ok(None)
             }
             Todo::Chapters { slug, path } => {
-                let title = api::title(&slug, &path)?;
-                let chapters = api::chapters(&title)?;
+                let title = anime_sama::title(&slug, &path)?;
+                let chapters = anime_sama::chapters(&title)?;
                 self.status.clear();
                 Ok(Some((title, chapters)))
             }
@@ -353,8 +348,7 @@ impl Search {
         frame.render_widget(Paragraph::new(hint).dim(), status);
 
         if self.help {
-            let items = t("search.help").lines().map(String::from).collect();
-            crate::popup(frame, t("help"), items, &mut ListState::default());
+            crate::draw_help(frame, "search.help");
         }
         if let Some(list) = &mut self.languages {
             crate::draw_languages(frame, list);
@@ -362,16 +356,5 @@ impl Search {
         // Covers are drawn above the text: hide them while a popup is open.
         let popup = self.help || self.languages.is_some();
         if popup { Vec::new() } else { placements }
-    }
-}
-
-/// One search at a time; queries already outdated when it is free are skipped.
-fn search(queries: Receiver<String>, found: Sender<Found>) -> Option<()> {
-    loop {
-        let query = queries.recv().ok()?;
-        // Queries typed while the last search ran are outdated: keep only the newest.
-        let query = queries.try_iter().last().unwrap_or(query);
-        let result = api::search(&query).map_err(|e| e.to_string());
-        found.send(Found { query, result }).ok()?;
     }
 }

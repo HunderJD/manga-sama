@@ -1,3 +1,9 @@
+//! The reading screen: what you see, keys, scrolling, and asking the page loader for pages.
+
+pub mod page_loader;
+mod scroll;
+
+use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{
@@ -8,21 +14,12 @@ use ratatui::style::Stylize;
 use ratatui::widgets::{ListState, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Frame};
 
+use self::page_loader::{Loaded, PageLoader, Plan};
+use self::scroll::{AHEAD, Pos, ease, near_end, to_download, to_free, visible, window};
 use crate::Result;
-use crate::api::Chapter;
 use crate::i18n::{t, tf};
 use crate::kitty::{self, Geo, Placement, Stored};
-use crate::pages::{Loaded, Pages};
-
-/// Pages are at most this wide, like on the site.
-const MAX_WIDTH_PX: u32 = 900;
-/// Rows scrolled by j/k and by one mouse wheel notch.
-const STEP_ROWS: u32 = 3;
-/// After this many scrolls in a chapter, the next chapters are downloaded ahead.
-const PREFETCH_AFTER: u32 = 3;
-const PREFETCH_CHAPTERS: usize = 4;
-/// Time constant of the scroll ease-out, like CSS `scroll-behavior: smooth`: 95 % done after 3 of them.
-const GLIDE: Duration = Duration::from_millis(80);
+use crate::sources::anime_sama::Chapter;
 
 #[derive(PartialEq)]
 pub enum Exit {
@@ -30,84 +27,31 @@ pub enum Exit {
     Back,
 }
 
-/// Reader sizes.
-impl Geo {
-    /// Width of the page column, in cells.
-    fn page_cols(self) -> u16 {
-        self.cols.min((MAX_WIDTH_PX / self.cell_w).max(1) as u16)
-    }
-
-    /// Width of the page column, in pixels: pages are decoded at this width and shown 1:1.
-    fn page_px(self) -> u32 {
-        u32::from(self.page_cols()) * self.cell_w
-    }
-}
-
-/// Top of the view: a page and a pixel inside it, so pages loading above don't move what is read.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-struct Pos {
-    page: usize,
-    px: u32,
-}
-
-/// Moves the view by `delta` px, never above the first page nor below the end line (`end` px high).
-/// Works on the offset from the top of the chapter: `pos` → offset, add `delta` and clamp,
-/// then walk the pages to turn the offset back into a page and a pixel inside it.
-fn scroll(heights: &[u32], view: u32, end: u32, pos: Pos, delta: i64) -> Pos {
-    let above: u32 = heights[..pos.page.min(heights.len())].iter().sum();
-    let max = (heights.iter().sum::<u32>() + end).saturating_sub(view);
-    let mut offset = (i64::from(above + pos.px) + delta).clamp(0, i64::from(max)) as u32;
-    let mut page = 0;
-    while page + 1 < heights.len() && offset >= heights[page] {
-        offset -= heights[page];
-        page += 1;
-    }
-    Pos { page, px: offset }
-}
-
-/// The slices of pages the view shows from `pos`, top to bottom: (page, first px, height px).
-fn visible(heights: &[u32], view: u32, pos: Pos) -> Vec<(usize, u32, u32)> {
-    let mut slices = Vec::new();
-    let (mut page, mut top, mut left) = (pos.page, pos.px, view);
-    while left > 0 && page < heights.len() {
-        let height = heights[page].saturating_sub(top).min(left);
-        if height > 0 {
-            slices.push((page, top, height));
-        }
-        left -= height;
-        page += 1;
-        top = 0;
-    }
-    slices
-}
-
-/// The chapters to download ahead while reading chapter `current`.
-fn next_chapters(chapters: &[Chapter], current: usize) -> &[Chapter] {
-    let start = (current + 1).min(chapters.len());
-    &chapters[start..(start + PREFETCH_CHAPTERS).min(chapters.len())]
-}
-
-/// Part of the pending scroll to do after `dt`: by elapsed time, so the glide is the same at any
-/// frame rate. At least 1 px, never past `pending`.
-fn ease(pending: i64, dt: Duration) -> i64 {
-    let share = 1.0 - (-dt.as_secs_f64() / GLIDE.as_secs_f64()).exp();
-    match (pending as f64 * share).round() as i64 {
-        // Rounds to 0 when little is left: move 1 px instead, so the glide always ends.
-        0 => pending.signum(),
-        step => step,
-    }
-}
+/// Rows scrolled by j/k and by one mouse wheel notch.
+const STEP_ROWS: u32 = 3;
 
 enum Page {
-    Loading,
-    Failed(String),
+    /// Not in kitty: not decoded yet, or freed since. A known height is kept so the layout
+    /// doesn't move.
+    Waiting(Option<u32>),
     Ready(Stored),
+    Failed(String),
+}
+
+impl Page {
+    fn height(&self) -> Option<u32> {
+        match self {
+            Page::Waiting(height) => *height,
+            Page::Ready(image) => Some(image.height),
+            Page::Failed(_) => None,
+        }
+    }
 }
 
 enum Overlay {
-    /// `filter`: the chapter number typed so far.
     Chapters {
         list: ListState,
+        /// The chapter number typed so far.
         filter: String,
     },
     Help,
@@ -131,17 +75,19 @@ fn matching(chapters: &[Chapter], filter: &str) -> Vec<usize> {
 }
 
 struct Reader<'a> {
-    io: &'a mut Pages,
+    loader: &'a mut PageLoader,
     title: String,
     chapters: Vec<Chapter>,
-    chapter: usize,
+    /// Index of the chapter read, in `chapters`.
+    current: usize,
     job: u64,
     pages: Vec<Page>,
     pos: Pos,
     /// Pixels still to scroll, done a bit each frame.
     pending: i64,
-    /// Scroll actions in this chapter, to start the prefetch.
-    scrolls: u32,
+    /// What the last plan was made for (pages to decode, pages to download, next chapter's
+    /// start): a new plan is sent only when it changes.
+    planned: Option<(Range<usize>, Range<usize>, bool)>,
     frame_at: Instant,
     geo: Geo,
     /// Pixel heights of each page and of the view, from the last frame.
@@ -153,56 +99,58 @@ struct Reader<'a> {
 
 pub fn run(
     terminal: &mut DefaultTerminal,
-    io: &mut Pages,
+    loader: &mut PageLoader,
     title: String,
     chapters: Vec<Chapter>,
 ) -> Result<Exit> {
     let mut reader = Reader {
-        io,
+        loader,
         title,
         chapters,
-        chapter: 0,
+        current: 0,
         job: 0,
         pages: Vec::new(),
         pos: Pos::default(),
         pending: 0,
-        scrolls: 0,
+        planned: None,
         frame_at: Instant::now(),
         geo: Geo::now()?,
         heights: Vec::new(),
         view: 0,
         bar: true,
+        // Opens on the chapter list: nothing is downloaded until a chapter is chosen.
         overlay: Some(chapter_list(0)),
     };
-    // Nothing is downloaded until a chapter is chosen in the list.
     let exit = reader.event_loop(terminal);
-    reader.io.stop();
-    reader.delete_images()?;
+    // An empty plan: leaving the reader stops the downloads.
+    reader.loader.plan(Plan::default());
+    reader.free_images()?;
     exit
 }
 
 impl Reader<'_> {
     fn open(&mut self, chapter: usize) -> Result<()> {
-        self.chapter = chapter;
+        self.current = chapter;
         self.pos = Pos::default();
         self.pending = 0;
-        self.scrolls = 0;
         self.load()
     }
 
     /// (Re)loads the pages of the current chapter at the current width, from the visible page on.
     fn load(&mut self) -> Result<()> {
-        self.delete_images()?;
-        let chapter = self.chapters[self.chapter];
-        self.pages = (0..chapter.pages).map(|_| Page::Loading).collect();
-        let start = (self.pos.page as u32 + 1).min(chapter.pages);
-        self.job = self
-            .io
-            .request(&self.title, chapter, start, self.geo.page_px());
+        self.free_images()?;
+        let chapter = self.chapters[self.current];
+        self.pages = (0..chapter.pages).map(|_| Page::Waiting(None)).collect();
+        // Heights change with the width: stay on the same page, but from its top.
+        self.pos.px = 0;
+        // The old chapter's heights would ask for the wrong pages until the next frame.
+        self.heights.clear();
+        self.planned = None;
+        self.job = self.loader.new_job();
         Ok(())
     }
 
-    fn delete_images(&mut self) -> Result<()> {
+    fn free_images(&mut self) -> Result<()> {
         kitty::free(self.pages.iter().filter_map(|page| match page {
             Page::Ready(image) => Some(image.id),
             _ => None,
@@ -213,21 +161,92 @@ impl Reader<'_> {
         if loaded.job != self.job {
             return Ok(());
         }
-        let Some(slot) = self.pages.get_mut(loaded.page as usize - 1) else {
+        // A page that already has its image (decoded twice across two plans) keeps it.
+        let Some(page @ Page::Waiting(_)) = self.pages.get_mut(loaded.page as usize - 1) else {
             return Ok(());
         };
-        *slot = match loaded.image {
+        *page = match loaded.image {
             Ok(image) => Page::Ready(kitty::transmit(&image)?),
             Err(e) => Page::Failed(e),
         };
         Ok(())
     }
 
+    /// Follows the view: when it moves, a new plan tells the loader what to get, and images
+    /// farthest from it are freed once kitty holds more than the budget.
+    /// Only the view ± 2 is decoded (decoded pages take kitty's memory), but 5 more pages are
+    /// downloaded ahead: the network is the slow part, so it has to start early.
+    fn follow_view(&mut self) -> Result<()> {
+        let slices = visible(&self.heights, self.view, self.pos);
+        let (Some(&(first, ..)), Some(&(last, ..))) = (slices.first(), slices.last()) else {
+            return Ok(());
+        };
+        let len = self.pages.len();
+        let near = window(first, last, len);
+        let wanted = (
+            near.clone(),
+            to_download(first, last, len),
+            near_end(last, len),
+        );
+        if self.planned.as_ref() != Some(&wanted) {
+            self.send_plan(&wanted);
+            self.planned = Some(wanted);
+        }
+        self.free_far(&near)
+    }
+
+    /// Like the site, only what the view is about to reach: the pages around it decoded, the
+    /// next ones downloaded, and the next chapter's start once the end is near.
+    fn send_plan(&self, (near, ahead, next_start): &(Range<usize>, Range<usize>, bool)) {
+        let number = self.chapters[self.current].number;
+        let page = |index: usize| (number, index as u32 + 1);
+        let decode = near
+            .clone()
+            .filter(|&index| matches!(self.pages[index], Page::Waiting(_)))
+            .map(page)
+            .collect();
+        let mut download: Vec<_> = ahead.clone().map(page).collect();
+        if let Some(next) = self.chapters.get(self.current + 1).filter(|_| *next_start) {
+            let start = 1..=next.pages.min(AHEAD as u32);
+            download.extend(start.map(|page| (next.number, page)));
+        }
+        self.loader.plan(Plan {
+            job: self.job,
+            title: self.title.clone(),
+            width: self.geo.page_px(),
+            decode,
+            download,
+        });
+    }
+
+    /// Frees the images farthest from `near` while kitty holds more than the budget.
+    fn free_far(&mut self, near: &Range<usize>) -> Result<()> {
+        let stored: Vec<_> = self
+            .pages
+            .iter()
+            .enumerate()
+            .filter_map(|(index, page)| match page {
+                Page::Ready(image) => {
+                    Some((index, u64::from(image.width) * u64::from(image.height) * 3))
+                }
+                _ => None,
+            })
+            .collect();
+        let mut far = Vec::new();
+        for index in to_free(&stored, near) {
+            if let Page::Ready(image) = &self.pages[index] {
+                far.push(image.id);
+                self.pages[index] = Page::Waiting(Some(image.height));
+            }
+        }
+        kitty::free(far)
+    }
+
     fn event_loop(&mut self, terminal: &mut DefaultTerminal) -> Result<Exit> {
         // What kitty shows now.
         let mut shown = Vec::new();
         loop {
-            while let Ok(loaded) = self.io.done.try_recv() {
+            while let Ok(loaded) = self.loader.done.try_recv() {
                 self.receive(loaded)?;
             }
             let geo = Geo::now()?;
@@ -238,6 +257,7 @@ impl Reader<'_> {
                     self.load()?;
                 }
             }
+            self.follow_view()?;
             let now = Instant::now();
             // Capped, so that the time spent waiting for a key doesn't turn into a jump.
             self.animate(
@@ -293,10 +313,7 @@ impl Reader<'_> {
                 crate::popup(frame, title.trim_end(), items, list);
             }
             Some(Overlay::Languages(list)) => crate::draw_languages(frame, list),
-            Some(Overlay::Help) => {
-                let items = t("reader.help").lines().map(String::from).collect();
-                crate::popup(frame, t("help"), items, &mut ListState::default());
-            }
+            Some(Overlay::Help) => crate::draw_help(frame, "reader.help"),
         }
         // Images are drawn above the text: hide them while a popup is open.
         Vec::new()
@@ -304,18 +321,16 @@ impl Reader<'_> {
 
     /// Page heights and view size for this frame, keeping the view inside the chapter.
     fn layout(&mut self, main: Rect) {
+        // A page not decoded yet takes the height of a typical 2:3 page.
         let placeholder = self.geo.page_px() * 3 / 2;
         self.heights = self
             .pages
             .iter()
-            .map(|page| match page {
-                Page::Ready(image) => image.height,
-                _ => placeholder,
-            })
+            .map(|page| page.height().unwrap_or(placeholder))
             .collect();
         self.view = u32::from(main.height) * self.geo.cell_h;
         // Moves nothing: only brings `pos` back inside the chapter when heights changed
-        // (a page loaded, a resize).
+        // (a page decoded, a resize).
         self.pos = self.scrolled(0);
     }
 
@@ -323,7 +338,7 @@ impl Reader<'_> {
     /// "end of chapter" line, one cell high: that's the `end` given to `scroll`.
     fn scrolled(&self, delta: i64) -> Pos {
         let end_line = self.geo.cell_h;
-        scroll(&self.heights, self.view, end_line, self.pos, delta)
+        scroll::scroll(&self.heights, self.view, end_line, self.pos, delta)
     }
 
     /// Draws the loading and error messages and the end line; returns where the page images go.
@@ -342,31 +357,34 @@ impl Reader<'_> {
             let row = (y / geo.cell_h) as u16;
             let text = match &self.pages[page] {
                 Page::Ready(image) => {
+                    // Very long pages are narrower than the column: centered.
+                    let indent = geo.page_px().saturating_sub(image.width) / 2;
                     placements.push(Placement {
                         id: image.id,
-                        x,
+                        x: x + (indent / geo.cell_w) as u16,
                         y: main.y + row,
-                        offset: y % geo.cell_h,
+                        x_offset: indent % geo.cell_w,
+                        y_offset: y % geo.cell_h,
                         src_y: top,
                         src_w: image.width,
                         src_h: height,
                     });
                     None
                 }
-                Page::Loading => Some(t("loading").to_string()),
                 Page::Failed(e) => Some(tf("error", &[("e", e)])),
+                _ => Some(t("loading").to_string()),
             };
             if let Some(text) = text {
                 let rows = (y + height).div_ceil(geo.cell_h) as u16 - row;
-                message(frame, Rect::new(x, main.y + row, cols, rows), &text);
+                draw_message(frame, Rect::new(x, main.y + row, cols, rows), &text);
             }
             y += height;
         }
 
         let end_row = y.div_ceil(geo.cell_h) as u16;
         if end_row < main.height {
-            let end = match self.chapters.get(self.chapter + 1) {
-                Some(_) => tf("reader.end", &[("n", &self.chapters[self.chapter].number)]),
+            let end = match self.chapters.get(self.current + 1) {
+                Some(_) => tf("reader.end", &[("n", &self.chapters[self.current].number)]),
                 None => t("reader.last").to_string(),
             };
             let line = Rect::new(main.x, main.y + end_row, main.width, 1);
@@ -376,7 +394,7 @@ impl Reader<'_> {
     }
 
     fn draw_bar(&self, frame: &mut Frame, area: Rect) {
-        let chapter = self.chapters[self.chapter];
+        let chapter = self.chapters[self.current];
         let status = tf(
             "reader.status",
             &[
@@ -423,17 +441,17 @@ impl Reader<'_> {
             KeyCode::Char('H') => self.bar = !self.bar,
             _ if self.overlay.is_some() => self.handle_overlay(code)?,
             KeyCode::Esc => return Ok(Some(Exit::Back)),
-            KeyCode::F(1) => self.overlay = Some(chapter_list(self.chapter)),
+            KeyCode::F(1) => self.overlay = Some(chapter_list(self.current)),
             KeyCode::Char('?') => self.overlay = Some(Overlay::Help),
-            KeyCode::Char('j') | KeyCode::Down => self.scroll_by(step),
-            KeyCode::Char('k') | KeyCode::Up => self.scroll_by(-step),
-            KeyCode::Char('d') => self.scroll_by(half),
-            KeyCode::Char('u') => self.scroll_by(-half),
-            KeyCode::Char('l') | KeyCode::Right if self.chapter + 1 < self.chapters.len() => {
-                self.open(self.chapter + 1)?
+            KeyCode::Char('j') | KeyCode::Down => self.pending += step,
+            KeyCode::Char('k') | KeyCode::Up => self.pending -= step,
+            KeyCode::Char('d') => self.pending += half,
+            KeyCode::Char('u') => self.pending -= half,
+            KeyCode::Char('l') | KeyCode::Right if self.current + 1 < self.chapters.len() => {
+                self.open(self.current + 1)?
             }
-            KeyCode::Char('h') | KeyCode::Left if self.chapter > 0 => {
-                self.open(self.chapter - 1)?
+            KeyCode::Char('h') | KeyCode::Left if self.current > 0 => {
+                self.open(self.current - 1)?
             }
             _ => {}
         }
@@ -501,18 +519,9 @@ impl Reader<'_> {
     fn typing(&self) -> bool {
         matches!(&self.overlay, Some(Overlay::Chapters { filter, .. }) if !filter.is_empty())
     }
-
-    fn scroll_by(&mut self, delta: i64) {
-        self.pending += delta;
-        self.scrolls += 1;
-        if self.scrolls == PREFETCH_AFTER {
-            let next = next_chapters(&self.chapters, self.chapter);
-            self.io.prefetch(&self.title, next);
-        }
-    }
 }
 
-fn message(frame: &mut Frame, area: Rect, text: &str) {
+fn draw_message(frame: &mut Frame, area: Rect, text: &str) {
     let text = Paragraph::new(text).centered().wrap(Wrap { trim: true });
     frame.render_widget(text, area.centered_vertically(Constraint::Length(3)));
 }
@@ -521,72 +530,11 @@ fn message(frame: &mut Frame, area: Rect, text: &str) {
 mod tests {
     use super::*;
 
-    const HEIGHTS: [u32; 3] = [100, 200, 50];
-    const END: u32 = 10;
-
-    fn at(page: usize, px: u32) -> Pos {
-        Pos { page, px }
-    }
-
-    #[test]
-    fn scrolling() {
-        assert_eq!(scroll(&HEIGHTS, 80, END, at(0, 0), 30), at(0, 30));
-        assert_eq!(scroll(&HEIGHTS, 80, END, at(0, 90), 30), at(1, 20));
-        assert_eq!(scroll(&HEIGHTS, 80, END, at(1, 20), -30), at(0, 90));
-        assert_eq!(scroll(&HEIGHTS, 80, END, at(0, 10), -50), at(0, 0));
-        // 350 px of pages + the end line, in a view of 80: the bottom is 280 px down.
-        assert_eq!(scroll(&HEIGHTS, 80, END, at(2, 0), 1000), at(1, 180));
-        assert_eq!(scroll(&[30], 80, END, at(0, 0), 50), at(0, 0));
-    }
-
-    #[test]
-    fn visible_slices() {
-        assert_eq!(visible(&HEIGHTS, 80, at(0, 70)), [(0, 70, 30), (1, 0, 50)]);
-        assert_eq!(
-            visible(&HEIGHTS, 80, at(1, 180)),
-            [(1, 180, 20), (2, 0, 50)]
-        );
-    }
-
-    #[test]
-    fn easing() {
-        // After one time constant: 1 - e^-1 of the way.
-        assert_eq!(ease(100, GLIDE), 63);
-        assert_eq!(ease(-100, GLIDE), -63);
-        assert_eq!(ease(3, Duration::from_millis(1)), 1);
-        assert_eq!(ease(-1, Duration::from_millis(1)), -1);
-        assert_eq!(ease(100, Duration::from_secs(10)), 100);
-    }
-
-    #[test]
-    fn prefetched_chapters() {
-        let chapters: Vec<_> = (1..=6).map(|number| Chapter { number, pages: 1 }).collect();
-        let numbers = |current| {
-            let next = next_chapters(&chapters, current);
-            next.iter().map(|c| c.number).collect::<Vec<_>>()
-        };
-        assert_eq!(numbers(0), [2, 3, 4, 5]);
-        assert_eq!(numbers(4), [6]);
-        assert!(numbers(5).is_empty());
-    }
-
     #[test]
     fn chapter_filter() {
         let chapters = [1, 2, 12, 21, 120].map(|number| Chapter { number, pages: 1 });
         assert_eq!(matching(&chapters, ""), [0, 1, 2, 3, 4]);
         assert_eq!(matching(&chapters, "12"), [2, 4]);
         assert!(matching(&chapters, "9").is_empty());
-    }
-
-    #[test]
-    fn page_width() {
-        let geo = Geo {
-            cols: 200,
-            rows: 50,
-            cell_w: 10,
-            cell_h: 20,
-        };
-        assert_eq!(geo.page_cols(), 90);
-        assert_eq!(geo.page_px(), 900);
     }
 }

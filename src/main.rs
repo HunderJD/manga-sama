@@ -1,12 +1,13 @@
-mod api;
+//! Entry point: sets up the terminal, then goes back and forth between search and reading.
+
 mod i18n;
 mod kitty;
-mod pages;
 mod reader;
 mod search;
-mod tiles;
+mod sources;
 
-use std::io::stdout;
+use std::io::{IsTerminal, stdout};
+use std::thread;
 
 use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture, KeyCode};
 use ratatui::crossterm::execute;
@@ -19,10 +20,17 @@ type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
 fn main() {
     let mut terminal = ratatui::init();
+    // ratatui's hook restores the terminal. Only the main thread may do that: a background thread
+    // that panics ends alone, and the app keeps running.
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = execute!(stdout(), DisableMouseCapture);
-        hook(info);
+        if thread::current().name() == Some("main") {
+            let _ = execute!(stdout(), DisableMouseCapture);
+            kitty::cleanup();
+            hook(info);
+        } else if !std::io::stderr().is_terminal() {
+            eprintln!("{info}");
+        }
     }));
     let result = execute!(stdout(), EnableMouseCapture)
         .map_err(Into::into)
@@ -38,9 +46,9 @@ fn main() {
 
 fn run(terminal: &mut DefaultTerminal) -> Result<()> {
     let mut search = search::Search::new();
-    let mut pages = pages::Pages::spawn();
+    let mut loader = reader::page_loader::PageLoader::spawn();
     while let Some((title, chapters)) = search.run(terminal)? {
-        if reader::run(terminal, &mut pages, title, chapters)? == reader::Exit::Quit {
+        if reader::run(terminal, &mut loader, title, chapters)? == reader::Exit::Quit {
             break;
         }
     }
@@ -67,6 +75,12 @@ fn pick_language(list: &mut ListState, code: KeyCode) -> bool {
     true
 }
 
+/// The help popup: the lines of the locale text `key`.
+fn draw_help(frame: &mut Frame, key: &'static str) {
+    let lines = i18n::t(key).lines().map(String::from).collect();
+    popup(frame, i18n::t("help"), lines, &mut ListState::default());
+}
+
 fn draw_languages(frame: &mut Frame, list: &mut ListState) {
     let names = i18n::names().into_iter().map(String::from).collect();
     popup(frame, i18n::t("languages"), names, list);
@@ -76,8 +90,9 @@ fn draw_languages(frame: &mut Frame, list: &mut ListState) {
 fn popup(frame: &mut Frame, title: &str, items: Vec<String>, state: &mut ListState) {
     let longest = items
         .iter()
-        .chain([&title.to_string()])
-        .map(|i| i.chars().count())
+        .map(String::as_str)
+        .chain([title])
+        .map(|text| text.chars().count())
         .max();
     let width = longest.unwrap_or(0) as u16 + 4;
     let height = (items.len() as u16 + 2).min(frame.area().height * 4 / 5);

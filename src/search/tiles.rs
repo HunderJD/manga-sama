@@ -1,10 +1,6 @@
-//! Search results as a grid of covers, loaded like the site's `loading="lazy"`:
-//! only the covers on screen are downloaded, one at a time.
+//! Search results as a grid of covers (Ctrl+T): layout and drawing; only the covers on screen are asked for.
 
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
 
 use ratatui::Frame;
 use ratatui::crossterm::event::KeyCode;
@@ -12,23 +8,17 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::widgets::{Paragraph, Wrap};
 
+use super::cover_loader::CoverLoader;
 use crate::Result;
-use crate::api::{self, Link};
 use crate::kitty::{self, Geo, Placement, Stored};
-use crate::pages::{self, Image};
+use crate::sources::anime_sama::Link;
 
 /// Tile width in cells, a look choice: smaller means more covers per row but shorter titles.
 const TILE_COLS: u16 = 18;
 const GAP: u16 = 1;
 
-/// Covers to fetch (the missing ones on screen, in order) and the width to decode them at.
-type Job = (Vec<String>, u32);
-/// A decoded cover: its URL, the width it was decoded at, the image.
-type Cover = (String, u32, Result<Image, String>);
-
 pub struct Tiles {
-    jobs: Sender<Job>,
-    done: Receiver<Cover>,
+    covers: CoverLoader,
     /// Covers already in kitty by URL; `None` when the download or decoding failed.
     thumbs: HashMap<String, Option<Stored>>,
     /// Covers of the last job sent.
@@ -43,12 +33,8 @@ pub struct Tiles {
 
 impl Tiles {
     pub fn new() -> Self {
-        let (jobs, job_rx) = mpsc::channel();
-        let (done_tx, done) = mpsc::channel();
-        thread::spawn(move || fetch(job_rx, done_tx));
         Tiles {
-            jobs,
-            done,
+            covers: CoverLoader::spawn(),
             thumbs: HashMap::new(),
             asked: Vec::new(),
             top: 0,
@@ -59,16 +45,17 @@ impl Tiles {
 
     /// Sends the covers that arrived to kitty.
     pub fn receive(&mut self) -> Result<()> {
-        while let Ok((url, width, image)) = self.done.try_recv() {
+        while let Ok(cover) = self.covers.done.try_recv() {
             // Decoded for an older size, or twice: skip it.
-            if width != self.width || self.thumbs.contains_key(&url) {
+            if cover.width != self.width || self.thumbs.contains_key(&cover.url) {
                 continue;
             }
-            let stored = image
+            let stored = cover
+                .image
                 .ok()
                 .map(|image| kitty::transmit(&image))
                 .transpose()?;
-            self.thumbs.insert(url, stored);
+            self.thumbs.insert(cover.url, stored);
         }
         Ok(())
     }
@@ -117,9 +104,10 @@ impl Tiles {
             let y = area.y + (n / self.columns) as u16 * (tile_rows + GAP);
 
             let title: String = link.name.chars().take(usize::from(TILE_COLS)).collect();
-            let title = match index == selected {
-                true => Paragraph::new(title).reversed(),
-                false => Paragraph::new(title),
+            let title = if index == selected {
+                Paragraph::new(title).reversed()
+            } else {
+                Paragraph::new(title)
             };
             let title_area = Rect::new(x, y + cover_rows, TILE_COLS, 1).intersection(area);
             frame.render_widget(title, title_area);
@@ -131,7 +119,8 @@ impl Tiles {
                     id: image.id,
                     x,
                     y,
-                    offset: 0,
+                    x_offset: 0,
+                    y_offset: 0,
                     src_y: 0,
                     src_w: image.width,
                     src_h: image.height.min(u32::from(cover_rows) * geo.cell_h),
@@ -149,8 +138,7 @@ impl Tiles {
 
         // Only when a cover on screen was never asked for: arrivals alone don't resend anything.
         if missing.iter().any(|url| !self.asked.contains(url)) {
-            // Fails only if the cover thread is gone; the tiles then stay without covers.
-            let _ = self.jobs.send((missing.clone(), self.width));
+            self.covers.request(missing.clone(), self.width);
             self.asked = missing;
         }
         placements
@@ -174,38 +162,6 @@ pub fn moved(selected: usize, len: usize, columns: usize, key: KeyCode) -> usize
         _ => None,
     };
     target.filter(|&i| i < len).unwrap_or(selected)
-}
-
-/// Downloads and decodes covers, one request at a time. A new job replaces the queue.
-fn fetch(jobs: Receiver<Job>, done: Sender<Cover>) -> Option<()> {
-    // ponytail: every cover downloaded this session stays in memory (a few dozen KB each).
-    let mut cache: HashMap<String, Vec<u8>> = HashMap::new();
-    let mut queue: Vec<String> = Vec::new();
-    let mut width = 0;
-    loop {
-        // Idle: wait for a job. Busy: only take the newest job already sent.
-        let job = if queue.is_empty() {
-            Some(jobs.recv().ok()?)
-        } else {
-            jobs.try_iter().last()
-        };
-        if let Some((urls, new_width)) = job {
-            // Popped from the end: the first tile first.
-            queue = urls.into_iter().rev().collect();
-            width = new_width;
-        }
-        let Some(url) = queue.pop() else {
-            continue;
-        };
-        let bytes = match cache.entry(url.clone()) {
-            Entry::Occupied(entry) => Ok(entry.into_mut()),
-            Entry::Vacant(entry) => api::cover(&url)
-                .map(|bytes| entry.insert(bytes))
-                .map_err(|e| e.to_string()),
-        };
-        let image = bytes.and_then(|bytes| pages::decode(bytes, width));
-        done.send((url, width, image)).ok()?;
-    }
 }
 
 #[cfg(test)]

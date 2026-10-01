@@ -11,7 +11,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use super::cover_loader::CoverLoader;
 use crate::Result;
 use crate::kitty::{self, Geo, Placement, Stored};
-use crate::sources::anime_sama::Link;
+use crate::sources::Link;
 
 /// Tile width in cells, a look choice: smaller means more covers per row but shorter titles.
 const TILE_COLS: u16 = 18;
@@ -145,8 +145,9 @@ impl Tiles {
     }
 }
 
-/// Rows taken by a cover `TILE_COLS` wide. Thumbnails are 440×248 px (checked on jsDelivr),
-/// so its height is the width × 248 / 440, rounded to whole rows.
+/// Rows taken by a cover `TILE_COLS` wide. Anime-Sama's thumbnails are 440×248 px (checked on
+/// jsDelivr), so its height is the width × 248 / 440, rounded to whole rows. Taller covers
+/// (Mangas-Origines' 150×150) only show their top.
 fn cover_rows(geo: Geo) -> u16 {
     let px = u32::from(TILE_COLS) * geo.cell_w * 248 / 440;
     ((px + geo.cell_h / 2) / geo.cell_h).max(1) as u16

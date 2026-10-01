@@ -6,7 +6,7 @@ use ratatui::widgets::ListState;
 
 use crate::Result;
 use crate::i18n::{t, tf};
-use crate::sources::anime_sama::Chapter;
+use crate::sources::Chapter;
 use crate::ui::{self, Go, Popups, Shared};
 
 const HELP: &[(&str, &str)] = &[
@@ -27,14 +27,13 @@ pub fn run(
 ) -> Result<Go<usize>> {
     let mut list = ListState::default().with_selected(Some(selected));
     let mut popups = Popups::default();
-    // The chapter number typed so far.
     let mut filter = String::new();
     loop {
         let shown = matching(chapters, &filter);
         terminal.draw(|frame| {
             let items = shown
                 .iter()
-                .map(|&i| tf("chapters.item", &[("n", &chapters[i].number)]))
+                .map(|&i| tf("chapters.item", &[("n", &chapters[i].label)]))
                 .collect();
             let title = format!("{work} · {} {filter}", t("chapters.title"));
             ui::popup(frame, title.trim_end(), items, &mut list);
@@ -82,9 +81,8 @@ pub fn run(
 
 /// Indexes of the chapters whose number starts with `filter`.
 fn matching(chapters: &[Chapter], filter: &str) -> Vec<usize> {
-    let starts = |c: &Chapter| c.number.to_string().starts_with(filter);
     (0..chapters.len())
-        .filter(|&i| starts(&chapters[i]))
+        .filter(|&i| chapters[i].label.starts_with(filter))
         .collect()
 }
 
@@ -94,7 +92,10 @@ mod tests {
 
     #[test]
     fn chapter_filter() {
-        let chapters = [1, 2, 12, 21, 120].map(|number| Chapter { number, pages: 1 });
+        let chapters = ["1", "2", "12", "21", "120"].map(|label| Chapter {
+            label: label.to_string(),
+            id: String::new(),
+        });
         assert_eq!(matching(&chapters, ""), [0, 1, 2, 3, 4]);
         assert_eq!(matching(&chapters, "12"), [2, 4]);
         assert!(matching(&chapters, "9").is_empty());

@@ -13,17 +13,19 @@ use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Frame};
 
 use self::page_loader::{Loaded, PageLoader, Plan};
-use self::scroll::{AHEAD, Pos, ease, near_end, to_download, to_free, visible, window};
+use self::scroll::{Pos, ease, near_end, to_download, to_free, visible, window};
 use crate::Result;
 use crate::i18n::{t, tf};
 use crate::kitty::{self, Geo, Placement, Stored};
-use crate::sources::anime_sama::Chapter;
-use crate::ui::{Popups, Shared};
+use crate::sources::{Chapter, Source};
+use crate::ui::{self, Go, Popups, Shared};
 
 /// How the reader is left.
 enum Exit {
     /// To the chapter list (Backspace, Esc, F1).
     Chapters,
+    /// To another chapter (h, l): its page list is asked first.
+    Open(usize),
     Quit,
 }
 
@@ -60,11 +62,14 @@ impl Page {
 
 struct Reader<'a> {
     loader: &'a mut PageLoader,
-    title: &'a str,
+    source: &'static dyn Source,
+    /// The work's name, for the bar.
+    name: &'a str,
     chapters: &'a [Chapter],
     /// Index of the chapter read, in `chapters`.
     current: usize,
     job: u64,
+    urls: Vec<String>,
     pages: Vec<Page>,
     pos: Pos,
     /// Pixels still to scroll, done a bit each frame.
@@ -81,21 +86,24 @@ struct Reader<'a> {
     popups: Popups,
 }
 
-/// Reads `chapters[chapter]` of `title` (the name the site knows the work by). Returns the chapter
-/// being read when going back to the chapter list, `None` to quit.
+/// Reads `chapters[chapter]` of the work `name`, from `source`. Returns the chapter being read
+/// when going back to the chapter list, `None` to quit.
 pub fn run(
     terminal: &mut DefaultTerminal,
     loader: &mut PageLoader,
-    title: &str,
+    source: &'static dyn Source,
+    name: &str,
     chapters: &[Chapter],
     chapter: usize,
 ) -> Result<Option<usize>> {
     let mut reader = Reader {
         loader,
-        title,
+        source,
+        name,
         chapters,
         current: chapter,
         job: 0,
+        urls: Vec::new(),
         pages: Vec::new(),
         pos: Pos::default(),
         pending: 0,
@@ -107,30 +115,45 @@ pub fn run(
         bar: true,
         popups: Popups::default(),
     };
-    reader.load()?;
-    let exit = reader.event_loop(terminal);
+    let exit = reader.read(terminal);
     // An empty plan: leaving the reader stops the downloads.
     reader.loader.plan(Plan::default());
     reader.free_images()?;
     Ok(match exit? {
-        Exit::Chapters => Some(reader.current),
+        Exit::Chapters | Exit::Open(_) => Some(reader.current),
         Exit::Quit => None,
     })
 }
 
 impl Reader<'_> {
-    fn open(&mut self, chapter: usize) -> Result<()> {
-        self.current = chapter;
-        self.pos = Pos::default();
-        self.pending = 0;
-        self.load()
+    /// Opens the current chapter, and the next ones while h and l are pressed.
+    fn read(&mut self, terminal: &mut DefaultTerminal) -> Result<Exit> {
+        loop {
+            // The loading screen draws no images: take the last chapter's off kitty first.
+            self.free_images()?;
+            self.pages.clear();
+            let (source, chapter) = (self.source, self.chapters[self.current].clone());
+            self.urls = match ui::loading(terminal, move || {
+                source.pages(&chapter).map_err(|e| e.to_string())
+            })? {
+                Go::Next(urls) => urls,
+                Go::Back => return Ok(Exit::Chapters),
+                Go::Quit => return Ok(Exit::Quit),
+            };
+            self.pos = Pos::default();
+            self.pending = 0;
+            self.load()?;
+            match self.event_loop(terminal)? {
+                Exit::Open(chapter) => self.current = chapter,
+                exit => return Ok(exit),
+            }
+        }
     }
 
     /// (Re)loads the pages of the current chapter at the current width, from the visible page on.
     fn load(&mut self) -> Result<()> {
         self.free_images()?;
-        let chapter = self.chapters[self.current];
-        self.pages = (0..chapter.pages).map(|_| Page::Waiting(None)).collect();
+        self.pages = self.urls.iter().map(|_| Page::Waiting(None)).collect();
         // Heights change with the width: stay on the same page, but from its top.
         self.pos.px = 0;
         // The old chapter's heights would ask for the wrong pages until the next frame.
@@ -152,7 +175,7 @@ impl Reader<'_> {
             return Ok(());
         }
         // A page that already has its image (decoded twice across two plans) keeps it.
-        let Some(page @ Page::Waiting(_)) = self.pages.get_mut(loaded.page as usize - 1) else {
+        let Some(page @ Page::Waiting(_)) = self.pages.get_mut(loaded.page) else {
             return Ok(());
         };
         *page = match loaded.image {
@@ -188,24 +211,19 @@ impl Reader<'_> {
     /// Like the site, only what the view is about to reach: the pages around it decoded, the
     /// next ones downloaded, and the next chapter's start once the end is near.
     fn send_plan(&self, (near, ahead, next_start): &(Range<usize>, Range<usize>, bool)) {
-        let number = self.chapters[self.current].number;
-        let page = |index: usize| (number, index as u32 + 1);
         let decode = near
             .clone()
             .filter(|&index| matches!(self.pages[index], Page::Waiting(_)))
-            .map(page)
+            .map(|index| (index, self.urls[index].clone()))
             .collect();
-        let mut download: Vec<_> = ahead.clone().map(page).collect();
-        if let Some(next) = self.chapters.get(self.current + 1).filter(|_| *next_start) {
-            let start = 1..=next.pages.min(AHEAD as u32);
-            download.extend(start.map(|page| (next.number, page)));
-        }
+        let download = self.urls[ahead.clone()].to_vec();
+        let next = self.chapters.get(self.current + 1).filter(|_| *next_start);
         self.loader.plan(Plan {
             job: self.job,
-            title: self.title.to_string(),
             width: self.geo.page_px(),
             decode,
             download,
+            next: next.map(|chapter| (self.source, chapter.clone())),
         });
     }
 
@@ -360,7 +378,7 @@ impl Reader<'_> {
         let end_row = y.div_ceil(geo.cell_h) as u16;
         if end_row < main.height {
             let end = match self.chapters.get(self.current + 1) {
-                Some(_) => tf("reader.end", &[("n", &self.chapters[self.current].number)]),
+                Some(_) => tf("reader.end", &[("n", &self.chapters[self.current].label)]),
                 None => t("reader.last").to_string(),
             };
             let line = Rect::new(main.x, main.y + end_row, main.width, 1);
@@ -370,15 +388,14 @@ impl Reader<'_> {
     }
 
     fn draw_bar(&self, frame: &mut Frame, area: Rect) {
-        let chapter = self.chapters[self.current];
         let status = tf(
             "reader.status",
             &[
-                ("title", &self.title.trim()),
-                ("chapter", &chapter.number),
+                ("title", &self.name),
+                ("chapter", &self.chapters[self.current].label),
                 ("chapters", &self.chapters.len()),
                 ("page", &(self.pos.page + 1)),
-                ("pages", &chapter.pages),
+                ("pages", &self.pages.len()),
             ],
         );
         frame.render_widget(Paragraph::new(status).reversed(), area);
@@ -391,7 +408,6 @@ impl Reader<'_> {
                 Shared::Used => return Ok(None),
                 Shared::Screen(key) => key.code,
             },
-            // The mouse is ignored while a popup is open.
             Event::Mouse(_) if self.popups.is_open() => return Ok(None),
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => KeyCode::Down,
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => KeyCode::Up,
@@ -415,10 +431,10 @@ impl Reader<'_> {
             KeyCode::Char('d') => self.pending += half,
             KeyCode::Char('u') => self.pending -= half,
             KeyCode::Char('l') | KeyCode::Right if self.current + 1 < self.chapters.len() => {
-                self.open(self.current + 1)?
+                return Ok(Some(Exit::Open(self.current + 1)));
             }
             KeyCode::Char('h') | KeyCode::Left if self.current > 0 => {
-                self.open(self.current - 1)?
+                return Ok(Some(Exit::Open(self.current - 1)));
             }
             _ => {}
         }

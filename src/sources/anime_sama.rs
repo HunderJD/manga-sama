@@ -1,139 +1,71 @@
-//! Talks to the Anime-Sama website: search, scan versions, chapter lists, page and cover images.
+//! The Anime-Sama website: search, scan versions, chapter lists and page URLs.
 //!
 //! Search, scan versions and work titles are read from the site's HTML: Anime-Sama has no JSON API
 //! for them (its own JS only gets an HTML fragment for the search bar). Only the chapter list
 //! (`get_nb_chap_et_img.php`) is JSON, and pages are plain image files.
 
-use std::collections::{BTreeMap, HashMap};
-use std::io::IsTerminal;
-use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::collections::BTreeMap;
 
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use scraper::{Html, Selector};
 
+use super::http::{get_text, get_text_cached};
+use super::{Chapter, Link, Source};
 use crate::Result;
 use crate::i18n::tf;
 
 const BASE: &str = "https://anime-sama.to";
 
-static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
-    ureq::Agent::config_builder()
-        .user_agent(concat!("manga-sama/", env!("CARGO_PKG_VERSION")))
-        // Long enough for the biggest pages (over 10 MB) on a slow connection.
-        .timeout_global(Some(Duration::from_secs(60)))
-        .build()
-        .into()
-});
+pub struct AnimeSama;
 
-/// A search result (`path` = slug) or a scan version (`path` = "scan/vf").
-#[derive(Clone)]
-pub struct Link {
-    pub name: String,
-    pub path: String,
-    /// Thumbnail URL, for search results.
-    pub cover: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Chapter {
-    pub number: u32,
-    pub pages: u32,
-}
-
-static START: LazyLock<Instant> = LazyLock::new(Instant::now);
-
-/// One line per request on stderr, only when it is redirected (`manga-sama 2> log`): the TUI owns the terminal.
-fn log(line: &str) {
-    if !std::io::stderr().is_terminal() {
-        eprintln!("{:8.3}s {line}", START.elapsed().as_secs_f64());
+impl Source for AnimeSama {
+    fn name(&self) -> &'static str {
+        "Anime-Sama"
     }
-}
 
-fn get(url: &str) -> Result<ureq::Body> {
-    let sent = Instant::now();
-    let response = AGENT.get(url).call();
-    let ms = sent.elapsed().as_millis();
-    match &response {
-        Ok(response) => log(&format!("{} {ms:>4} ms {url}", response.status().as_u16())),
-        Err(e) => log(&format!("ERR {ms:>4} ms {url}: {e}")),
+    /// A work's `path` is its slug, a version's `path` its folder ("scan/vf").
+    fn search(&self, query: &str) -> Result<Vec<Link>> {
+        let url = format!(
+            "{BASE}/catalogue/?search={}&type%5B%5D=Scans",
+            url_encode(query)
+        );
+        Ok(parse_search(&get_text(&url)?))
     }
-    Ok(response.map_err(|e| format!("{url}: {e}"))?.into_body())
-}
 
-fn get_text(url: &str) -> Result<String> {
-    Ok(get(url)?.read_to_string()?)
-}
+    fn versions(&self, work: &Link) -> Result<Vec<Link>> {
+        let url = format!("{BASE}/catalogue/{}/", work.path);
+        Ok(parse_versions(&get_text_cached(&url)?))
+    }
 
-/// Some pages weigh more than the 10 MB ureq accepts by default.
-const MAX_IMAGE: u64 = 100 * 1024 * 1024;
+    fn chapters(&self, work: &Link, version: &Link) -> Result<Vec<Chapter>> {
+        let title = title(&work.path, &version.path)?;
+        let url = format!(
+            "{BASE}/s2/scans/get_nb_chap_et_img.php?oeuvre={}",
+            url_encode(&title)
+        );
+        parse_chapters(&title, &get_text_cached(&url)?)
+    }
 
-fn get_bytes(url: &str) -> Result<Vec<u8>> {
-    Ok(get(url)?
-        .into_with_config()
-        .limit(MAX_IMAGE)
-        .read_to_vec()?)
+    /// Pages are numbered files in the chapter's folder, given by the id (see `parse_chapters`):
+    /// no request needed.
+    fn pages(&self, chapter: &Chapter) -> Result<Vec<String>> {
+        let (folder, pages) = chapter.id.rsplit_once('/').ok_or("bad chapter id")?;
+        let pages: u32 = pages.parse()?;
+        Ok((1..=pages)
+            .map(|page| format!("{BASE}/s2/scans/{folder}/{page}.jpg"))
+            .collect())
+    }
 }
 
 fn url_encode(s: &str) -> String {
     utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
 }
 
-pub fn search(query: &str) -> Result<Vec<Link>> {
-    let url = format!(
-        "{BASE}/catalogue/?search={}&type%5B%5D=Scans",
-        url_encode(query)
-    );
-    Ok(parse_search(&get_text(&url)?))
-}
-
-/// Answers already fetched while the app runs (a work's versions, title and chapter list), by URL:
-/// going back and forth between screens never asks the site twice. Gone when the app quits.
-static SESSION: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Default::default);
-
-fn get_text_cached(url: &str) -> Result<String> {
-    if let Some(text) = SESSION
-        .lock()
-        .ok()
-        .and_then(|session| session.get(url).cloned())
-    {
-        return Ok(text);
-    }
-    let text = get_text(url)?;
-    if let Ok(mut session) = SESSION.lock() {
-        session.insert(url.to_string(), text.clone());
-    }
-    Ok(text)
-}
-
-pub fn versions(slug: &str) -> Result<Vec<Link>> {
-    let url = format!("{BASE}/catalogue/{slug}/");
-    Ok(parse_versions(&get_text_cached(&url)?))
-}
-
 /// The work's name as the chapter API expects it.
-pub fn title(slug: &str, path: &str) -> Result<String> {
+fn title(slug: &str, path: &str) -> Result<String> {
     let url = format!("{BASE}/catalogue/{slug}/{path}/");
     parse_title(&get_text_cached(&url)?)
         .ok_or_else(|| tf("anime_sama.no_title", &[("url", &url)]).into())
-}
-
-pub fn chapters(title: &str) -> Result<Vec<Chapter>> {
-    let url = format!(
-        "{BASE}/s2/scans/get_nb_chap_et_img.php?oeuvre={}",
-        url_encode(title)
-    );
-    parse_chapters(&get_text_cached(&url)?)
-}
-
-/// A search result's thumbnail. They live on jsdelivr (Anime-Sama's image repository), not on the site.
-pub fn cover(url: &str) -> Result<Vec<u8>> {
-    get_bytes(url)
-}
-
-pub fn page(title: &str, chapter: u32, page: u32) -> Result<Vec<u8>> {
-    let url = format!("{BASE}/s2/scans/{}/{chapter}/{page}.jpg", url_encode(title));
-    get_bytes(&url)
 }
 
 fn parse_search(html: &str) -> Vec<Link> {
@@ -186,15 +118,19 @@ fn parse_title(html: &str) -> Option<String> {
     doc.select(&title).next().map(|e| e.inner_html())
 }
 
-/// Empty chapters are dropped: the reader could never show them.
-fn parse_chapters(json: &str) -> Result<Vec<Chapter>> {
+/// Empty chapters are dropped: the reader could never show them. A chapter's id is its folder
+/// and its page count, `<title>/<number>/<pages>`: the title is percent-encoded, so it has no `/`.
+fn parse_chapters(title: &str, json: &str) -> Result<Vec<Chapter>> {
     // An unknown work gets `{"error": "..."}` instead of a chapter map: it parses as empty
     // and ends in the error below, with the site's answer in it.
     let chapters: Vec<_> = serde_json::from_str::<BTreeMap<u32, u32>>(json)
         .unwrap_or_default()
         .into_iter()
         .filter(|&(_, pages)| pages > 0)
-        .map(|(number, pages)| Chapter { number, pages })
+        .map(|(number, pages)| Chapter {
+            label: number.to_string(),
+            id: format!("{}/{number}/{pages}", url_encode(title)),
+        })
         .collect();
     if chapters.is_empty() {
         return Err(tf("anime_sama.bad_chapters", &[("json", &json)]).into());
@@ -207,22 +143,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn session_cache_answers_without_the_site() {
-        let url = "https://example.invalid/never-fetched";
-        SESSION
-            .lock()
-            .unwrap()
-            .insert(url.to_string(), "cached".to_string());
-        assert_eq!(get_text_cached(url).unwrap(), "cached");
-    }
-
-    #[test]
     fn search_results() {
         let html = r#"<div id="list_catalog">
             <div class="catalog-card"><a href="https://anime-sama.to/catalogue/berserk">
-                <img src="https://cdn.jsdelivr.net/berserk.webp"><h2 class="card-title">Berserk</h2></a></div>
-            <div class="catalog-card"><a href="https://anime-sama.to/catalogue/one-piece/">
-                <h2 class="card-title"> One Piece </h2></a></div>
+                <img loading="lazy" class="card-image" src="https://cdn.jsdelivr.net/gh/Anime-Sama/IMG@img/contenu/thumb/berserk0.webp" alt="Berserk">
+                <h2 class="card-title">Berserk</h2></a></div>
+            <div class="catalog-card"><a href="https://anime-sama.to/catalogue/berserk-of-gluttony/">
+                <h2 class="card-title"> Berserk of Gluttony </h2></a></div>
             <a href="https://anime-sama.to/catalogue/">Catalogue</a>
         </div>"#;
         let works = parse_search(html);
@@ -233,9 +160,10 @@ mod tests {
         let berserk = (
             "Berserk",
             "berserk",
-            Some("https://cdn.jsdelivr.net/berserk.webp"),
+            Some("https://cdn.jsdelivr.net/gh/Anime-Sama/IMG@img/contenu/thumb/berserk0.webp"),
         );
-        assert_eq!(got, [berserk, ("One Piece", "one-piece", None)]);
+        let gluttony = ("Berserk of Gluttony", "berserk-of-gluttony", None);
+        assert_eq!(got, [berserk, gluttony]);
     }
 
     #[test]
@@ -269,38 +197,33 @@ mod tests {
 
     #[test]
     fn chapter_list() {
-        let chapters = parse_chapters(r#"{"1":57,"2":25,"10":3}"#).unwrap();
-        let expected = [(1, 57), (2, 25), (10, 3)].map(|(number, pages)| Chapter { number, pages });
-        assert_eq!(chapters, expected);
+        let chapters = parse_chapters("Fate/Zero ", r#"{"1":57,"2":0,"10":3}"#).unwrap();
+        let got: Vec<_> = chapters
+            .iter()
+            .map(|c| (c.label.as_str(), c.id.as_str()))
+            .collect();
+        let zero = "Fate%2FZero%20";
         assert_eq!(
-            parse_chapters(r#"{"1":5,"2":0}"#).unwrap(),
-            [Chapter {
-                number: 1,
-                pages: 5
-            }]
+            got,
+            [
+                ("1", &*format!("{zero}/1/57")),
+                ("10", &format!("{zero}/10/3"))
+            ]
         );
-        assert!(parse_chapters(r#"{"error":"Oeuvre 'x' not found"}"#).is_err());
-        assert!(parse_chapters("{}").is_err());
+        assert!(parse_chapters("x", r#"{"error":"Oeuvre 'x' not found"}"#).is_err());
+        assert!(parse_chapters("x", "{}").is_err());
     }
 
     #[test]
-    #[ignore = "network"]
-    fn full_walk() {
-        let work = search("berserk")
-            .unwrap()
-            .into_iter()
-            .find(|w| w.path == "berserk")
-            .expect("berserk found");
-        let thumbnail = cover(work.cover.as_deref().expect("a cover")).unwrap();
-        image::load_from_memory(&thumbnail).unwrap();
-        let version = versions(&work.path)
-            .unwrap()
-            .into_iter()
-            .next()
-            .expect("a version");
-        let title = title(&work.path, &version.path).unwrap();
-        let chapters = chapters(&title).unwrap();
-        let bytes = page(&title, chapters[0].number, 1).unwrap();
-        image::load_from_memory(&bytes).unwrap();
+    fn page_urls() {
+        let chapter = Chapter {
+            label: "10".to_string(),
+            id: "Fate%2FZero%20/10/2".to_string(),
+        };
+        let folder = "https://anime-sama.to/s2/scans/Fate%2FZero%20/10";
+        assert_eq!(
+            AnimeSama.pages(&chapter).unwrap(),
+            [format!("{folder}/1.jpg"), format!("{folder}/2.jpg")]
+        );
     }
 }

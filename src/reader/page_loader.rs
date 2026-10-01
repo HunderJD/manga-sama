@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::panic::catch_unwind;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -11,9 +11,10 @@ use std::thread;
 
 use image::imageops::FilterType;
 
+use super::scroll::AHEAD;
 use crate::Result;
 use crate::i18n::tf;
-use crate::sources::anime_sama;
+use crate::sources::{self, Chapter, Source};
 
 /// Pages decoded at the same time. Downloads stay one at a time.
 const DECODERS: usize = 2;
@@ -25,13 +26,14 @@ const MAX_SIDE: u32 = 10_000;
 pub struct Plan {
     /// Tags the images sent back, so the reader knows which chapter they are for.
     pub job: u64,
-    pub title: String,
     /// Pixel width to decode pages at.
     pub width: u32,
-    /// Pages to download and decode, in order: (chapter number, page from 1).
-    pub decode: Vec<(u32, u32)>,
-    /// Pages to have in the cache only, after those: (chapter number, page from 1).
-    pub download: Vec<(u32, u32)>,
+    /// Pages to download and decode, in order: (index in the chapter, URL).
+    pub decode: Vec<(usize, String)>,
+    /// Pages to have in the cache only, after those.
+    pub download: Vec<String>,
+    /// A chapter whose first pages are downloaded last, once its source listed them.
+    pub next: Option<(&'static dyn Source, Chapter)>,
 }
 
 /// A downloaded page, waiting for a decoder.
@@ -39,14 +41,15 @@ struct Task {
     /// The plan it was asked in: decoders skip it once a newer plan exists.
     plan: u64,
     job: u64,
-    page: u32,
+    page: usize,
     width: u32,
     bytes: Arc<Vec<u8>>,
 }
 
 pub struct Loaded {
     pub job: u64,
-    pub page: u32,
+    /// Index in the chapter.
+    pub page: usize,
     pub image: Result<Image, String>,
 }
 
@@ -56,8 +59,8 @@ pub struct Image {
     pub rgb: Vec<u8>,
 }
 
-/// Every page downloaded this session, never evicted: (title, chapter number, page from 1).
-type Cache = Mutex<HashMap<(String, u32, u32), Arc<Vec<u8>>>>;
+/// Every page downloaded this session, by URL, never evicted.
+type Cache = Mutex<HashMap<String, Arc<Vec<u8>>>>;
 
 /// One thread downloads what the latest plan asks for, `DECODERS` others decode it.
 pub struct PageLoader {
@@ -106,15 +109,15 @@ impl PageLoader {
         // Pages already downloaded go straight to the decoders: they must not wait for the
         // downloader, which only reads a new plan between two downloads (and one can be slow).
         if let Ok(cache) = self.cache.lock() {
-            plan.decode.retain(|&(chapter, page)| {
-                let Some(bytes) = cache.get(&(plan.title.clone(), chapter, page)) else {
+            plan.decode.retain(|(page, url)| {
+                let Some(bytes) = cache.get(url) else {
                     return true;
                 };
                 let (job, width, bytes) = (plan.job, plan.width, bytes.clone());
                 let task = Task {
                     plan: number,
                     job,
-                    page,
+                    page: *page,
                     width,
                     bytes,
                 };
@@ -129,8 +132,9 @@ impl PageLoader {
 }
 
 /// Walks the latest plan one download at a time, to stay polite with the site: the pages to
-/// decode (handed to the decoders), then the pages to cache. A newer plan takes over between two
-/// pages. Returns once a channel is closed, i.e. when the app quits.
+/// decode (handed to the decoders), then the pages to cache, then the next chapter's start.
+/// A newer plan takes over between two pages. Returns once a channel is closed, i.e. when the
+/// app quits.
 fn downloader(
     plans: Receiver<(u64, Plan)>,
     tasks: Sender<Task>,
@@ -141,6 +145,14 @@ fn downloader(
     let mut step = 0;
     loop {
         let finished = step >= plan.decode.len() + plan.download.len();
+        if finished && let Some((source, chapter)) = plan.next.take() {
+            // Its pages go at the end of the downloads. A source that fails (or panics) only
+            // loses this head start: the reader lists the chapter again when opening it.
+            let pages = catch_unwind(AssertUnwindSafe(|| source.pages(&chapter)));
+            let pages = pages.ok().and_then(Result::ok).unwrap_or_default();
+            plan.download.extend(pages.into_iter().take(AHEAD));
+            continue;
+        }
         let first = if finished {
             Some(plans.recv().ok()?)
         } else {
@@ -152,8 +164,9 @@ fn downloader(
             continue;
         }
         let (job, width) = (plan.job, plan.width);
-        if let Some(&(chapter, page)) = plan.decode.get(step) {
-            match fetch(cache, &plan.title, chapter, page) {
+        if let Some((page, url)) = plan.decode.get(step) {
+            let page = *page;
+            match fetch(cache, url) {
                 Ok(bytes) => tasks
                     .send(Task {
                         plan: number,
@@ -171,9 +184,9 @@ fn downloader(
                     })
                     .ok()?,
             }
-        } else if let Some(&(chapter, page)) = plan.download.get(step - plan.decode.len()) {
+        } else if let Some(url) = plan.download.get(step - plan.decode.len()) {
             // A failed download is tried again when the page has to be decoded, and shown then.
-            let _ = fetch(cache, &plan.title, chapter, page);
+            let _ = fetch(cache, url);
         }
         step += 1;
     }
@@ -181,19 +194,18 @@ fn downloader(
 
 /// The page's bytes, from the cache, or downloaded into it. The lock is not held while
 /// downloading, so `PageLoader::plan` can read the cache meanwhile.
-fn fetch(cache: &Cache, title: &str, chapter: u32, page: u32) -> Result<Arc<Vec<u8>>, String> {
-    let key = (title.to_string(), chapter, page);
-    if let Some(bytes) = cache.lock().ok().and_then(|cache| cache.get(&key).cloned()) {
+fn fetch(cache: &Cache, url: &str) -> Result<Arc<Vec<u8>>, String> {
+    if let Some(bytes) = cache.lock().ok().and_then(|cache| cache.get(url).cloned()) {
         return Ok(bytes);
     }
     // A panic while downloading (an odd answer from the site) only fails this page, instead of
     // stopping the downloader and leaving every page loading forever.
-    let bytes = catch_unwind(|| anime_sama::page(title, chapter, page))
+    let bytes = catch_unwind(|| sources::image(url))
         .unwrap_or_else(|_| Err("panic".into()))
         .map_err(|e| e.to_string())?;
     let bytes = Arc::new(bytes);
     if let Ok(mut cache) = cache.lock() {
-        cache.insert(key, bytes.clone());
+        cache.insert(url.to_string(), bytes.clone());
     }
     Ok(bytes)
 }

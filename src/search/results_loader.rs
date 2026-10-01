@@ -3,16 +3,16 @@
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-use crate::sources::anime_sama::{self, Link};
+use super::Query;
+use crate::sources::{Link, SOURCES};
 
-/// A query and its results.
 pub struct Found {
-    pub query: String,
+    pub query: Query,
     pub result: Result<Vec<Link>, String>,
 }
 
 pub struct ResultsLoader {
-    queries: Sender<String>,
+    queries: Sender<Query>,
     pub found: Receiver<Found>,
 }
 
@@ -25,19 +25,20 @@ impl ResultsLoader {
     }
 
     /// Searches `query` in the background; the results come back in `found`.
-    pub fn search(&self, query: &str) {
+    pub fn search(&self, query: Query) {
         // Fails only if the thread is gone; the status then stays on "searching".
-        let _ = self.queries.send(query.to_string());
+        let _ = self.queries.send(query);
     }
 }
 
 /// One search at a time; queries already outdated when it is free are skipped.
 /// Returns once a channel is closed, i.e. when the app quits.
-fn searcher(queries: Receiver<String>, found: Sender<Found>) -> Option<()> {
+fn searcher(queries: Receiver<Query>, found: Sender<Found>) -> Option<()> {
     loop {
         let query = queries.recv().ok()?;
         let query = queries.try_iter().last().unwrap_or(query);
-        let result = anime_sama::search(&query).map_err(|e| e.to_string());
+        let (source, text) = &query;
+        let result = SOURCES[*source].search(text).map_err(|e| e.to_string());
         found.send(Found { query, result }).ok()?;
     }
 }

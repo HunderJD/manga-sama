@@ -6,7 +6,7 @@ use ratatui::widgets::ListState;
 
 use crate::Result;
 use crate::i18n::t;
-use crate::sources::anime_sama::Link;
+use crate::sources::Link;
 use crate::ui::{self, Go, Popups, Shared};
 
 const HELP: &[(&str, &str)] = &[

@@ -1,15 +1,15 @@
 # manga-sama
 
-Read [Anime-Sama](https://anime-sama.to) scans in your terminal.
+Read manga scans from French websites in your terminal: [Anime-Sama](https://anime-sama.to) and [Mangas-Origines](https://mangas-origines.fr).
 Search a title, pick a chapter, and scroll through the pages like on the website.
 
 🇫🇷 [Version française](README.fr.md)
 
 > [!WARNING]
-> **This is not an official Anime-Sama client.**
-> I'm not affiliated with Anime-Sama in any way, and the scans belong to their rights holders.
+> **This is not an official client of these sites.**
+> I'm not affiliated with Anime-Sama or Mangas-Origines in any way, and the scans belong to their rights holders.
 >
-> If you want to let the Anime-Sama team know about this project, go ahead, I don't mind.
+> If you want to let their teams know about this project, go ahead, I don't mind.
 > And if you want to work on it with me, you're welcome.
 
 ## What you need
@@ -57,6 +57,7 @@ The version screen only shows up when a work has several (e.g. color and black a
 |-----------|-----------------------|
 | arrows    | select                |
 | `Enter`   | open                  |
+| `Tab`     | other site            |
 | `Ctrl+T`  | cover tiles on / off  |
 | `Esc`     | quit                  |
 

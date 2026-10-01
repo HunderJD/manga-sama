@@ -6,9 +6,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 use crate::reader::page_loader::{self, Image};
-use crate::sources::anime_sama;
+use crate::sources;
 
-/// A decoded cover.
 pub struct Cover {
     pub url: String,
     /// The pixel width it was decoded at.
@@ -60,7 +59,7 @@ fn loader(jobs: Receiver<(Vec<String>, u32)>, done: Sender<Cover>) -> Option<()>
         };
         let bytes = match cache.entry(url.clone()) {
             Entry::Occupied(entry) => Ok(entry.into_mut()),
-            Entry::Vacant(entry) => anime_sama::cover(&url)
+            Entry::Vacant(entry) => sources::image(&url)
                 .map(|bytes| entry.insert(bytes))
                 .map_err(|e| e.to_string()),
         };

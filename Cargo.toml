@@ -3,15 +3,16 @@ name = "manga-sama"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-description = "Read Anime-Sama manga scans in the kitty terminal"
+description = "Read manga scans from French websites in the kitty terminal"
 repository = "https://github.com/HunderJD/manga-sama"
 license = "MIT"
 
 [dependencies]
 # Already pulled in by ureq; encodes the file path handed to kitty.
 base64 = "0.23.1"
-# jpeg + webp: covers and some pages are WebP, even pages served with a .jpg name (e.g. Berserk 1/1).
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "webp"] }
+# Anime-Sama: covers and some pages are WebP, even pages served with a .jpg name (e.g. Berserk 1/1).
+# Mangas-Origines: some covers and pages are PNG (e.g. The Mightiest Manager 1).
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 # Already pulled in by ureq; percent-encodes the title and the search query in URLs.
 percent-encoding = "2.3.2"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }

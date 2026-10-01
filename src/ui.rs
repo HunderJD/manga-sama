@@ -1,7 +1,7 @@
 //! Shared pieces of the screens: where to go next, the keys every screen has (help, languages,
 //! quit), the centered list popup, and the loading screen.
 
-use std::sync::mpsc;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
@@ -18,7 +18,6 @@ use crate::i18n::{self, t, tf};
 pub enum Go<T> {
     /// The next screen, with what was chosen.
     Next(T),
-    /// The previous screen.
     Back,
     Quit,
 }
@@ -36,7 +35,6 @@ pub enum Shared {
     Quit,
     /// Used by the popups: nothing left for the screen.
     Used,
-    /// For the screen.
     Screen(KeyEvent),
 }
 
@@ -141,11 +139,13 @@ pub fn loading<T: Send + 'static>(
     });
     let mut error = None;
     loop {
-        match answer.try_recv() {
+        // Waits a little before drawing: an answer from a cache comes without a loading screen.
+        let wait = Duration::from_millis(if error.is_none() { 50 } else { 0 });
+        match answer.recv_timeout(wait) {
             Ok(Ok(value)) => return Ok(Go::Next(value)),
             Ok(Err(e)) => error = Some(e),
             // The thread ended without an answer: it panicked.
-            Err(mpsc::TryRecvError::Disconnected) if error.is_none() => {
+            Err(RecvTimeoutError::Disconnected) if error.is_none() => {
                 error = Some("panic".to_string());
             }
             Err(_) => {}

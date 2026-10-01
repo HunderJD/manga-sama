@@ -19,7 +19,6 @@ use ratatui::crossterm::execute;
 
 use crate::i18n::t;
 use crate::reader::page_loader::PageLoader;
-use crate::sources::anime_sama;
 use crate::ui::Go;
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
@@ -55,14 +54,14 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
     let mut search = search::Search::new();
     let mut loader = PageLoader::spawn();
     'search: loop {
-        let work = match search.run(terminal)? {
-            Go::Next(work) => work,
+        let (source, work) = match search.run(terminal)? {
+            Go::Next(found) => found,
             Go::Back | Go::Quit => return Ok(()),
         };
 
-        let slug = work.path.clone();
+        let found = work.clone();
         let versions = match ui::loading(terminal, move || {
-            let versions = anime_sama::versions(&slug).map_err(|e| e.to_string())?;
+            let versions = source.versions(&found).map_err(|e| e.to_string())?;
             if versions.is_empty() {
                 return Err(t("search.no_scans").to_string());
             }
@@ -85,11 +84,9 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                 };
             }
 
-            let (slug, path) = (work.path.clone(), versions[version].path.clone());
-            let (title, chapters) = match ui::loading(terminal, move || {
-                let title = anime_sama::title(&slug, &path).map_err(|e| e.to_string())?;
-                let chapters = anime_sama::chapters(&title).map_err(|e| e.to_string())?;
-                Ok((title, chapters))
+            let (found, chosen) = (work.clone(), versions[version].clone());
+            let chapters = match ui::loading(terminal, move || {
+                source.chapters(&found, &chosen).map_err(|e| e.to_string())
             })? {
                 Go::Next(loaded) => loaded,
                 Go::Back if single => continue 'search,
@@ -106,7 +103,15 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                     Go::Quit => return Ok(()),
                 };
                 // Back from the reader: the chapter list, on the chapter being read.
-                chapter = match reader::run(terminal, &mut loader, &title, &chapters, chapter)? {
+                let read = reader::run(
+                    terminal,
+                    &mut loader,
+                    source,
+                    &work.name,
+                    &chapters,
+                    chapter,
+                );
+                chapter = match read? {
                     Some(chapter) => chapter,
                     None => return Ok(()),
                 };

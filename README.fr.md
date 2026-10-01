@@ -1,15 +1,15 @@
 # manga-sama
 
-Lis les scans d'[Anime-Sama](https://anime-sama.to) dans ton terminal.
+Lis des scans de sites français dans ton terminal : [Anime-Sama](https://anime-sama.to) et [Mangas-Origines](https://mangas-origines.fr).
 Tu cherches un titre, tu choisis un chapitre, et tu fais défiler les pages comme sur le site.
 
 🇬🇧 [English version](README.md)
 
 > [!WARNING]
-> **Ce n'est pas un client officiel d'Anime-Sama.**
-> Je n'ai aucun lien avec Anime-Sama, et les scans appartiennent à leurs ayants droit.
+> **Ce n'est pas un client officiel de ces sites.**
+> Je n'ai aucun lien avec Anime-Sama ni avec Mangas-Origines, et les scans appartiennent à leurs ayants droit.
 >
-> Si tu veux prévenir l'équipe d'Anime-Sama que ce projet existe, vas-y, ça ne me dérange pas.
+> Si tu veux prévenir leurs équipes que ce projet existe, vas-y, ça ne me dérange pas.
 > Et si tu veux bosser dessus avec moi, tu es le bienvenu.
 
 ## Ce qu'il te faut
@@ -57,6 +57,7 @@ L'écran des versions n'apparaît que si l'œuvre en a plusieurs (par exemple co
 |-----------|------------------------|
 | flèches   | choisir                |
 | `Entrée`  | ouvrir                 |
+| `Tab`     | autre site             |
 | `Ctrl+T`  | tuiles de couvertures  |
 | `Échap`   | quitter                |
 

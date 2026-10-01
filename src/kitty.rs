@@ -1,4 +1,5 @@
-//! Draws images in the terminal with the kitty graphics protocol and reads its size; used by both screens.
+//! Draws images in the terminal with the kitty graphics protocol and reads its size; used by the
+//! search (covers) and the reader.
 //! Spec: <https://sw.kovidgoyal.net/kitty/graphics-protocol/>
 
 use std::io::{Write, stdout};

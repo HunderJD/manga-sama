@@ -198,12 +198,7 @@ fn fetch(cache: &Cache, url: &str) -> Result<Arc<Vec<u8>>, String> {
     if let Some(bytes) = cache.lock().ok().and_then(|cache| cache.get(url).cloned()) {
         return Ok(bytes);
     }
-    // A panic while downloading (an odd answer from the site) only fails this page, instead of
-    // stopping the downloader and leaving every page loading forever.
-    let bytes = catch_unwind(|| sources::image(url))
-        .unwrap_or_else(|_| Err("panic".into()))
-        .map_err(|e| e.to_string())?;
-    let bytes = Arc::new(bytes);
+    let bytes = Arc::new(sources::image(url).map_err(|e| e.to_string())?);
     if let Ok(mut cache) = cache.lock() {
         cache.insert(url.to_string(), bytes.clone());
     }

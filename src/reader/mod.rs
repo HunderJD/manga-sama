@@ -366,7 +366,7 @@ impl Reader<'_> {
                     None
                 }
                 Page::Failed(e) => Some(tf("error", &[("e", e)])),
-                _ => Some(t("loading").to_string()),
+                Page::Waiting(_) => Some(t("loading").to_string()),
             };
             if let Some(text) = text {
                 let rows = (y + height).div_ceil(geo.cell_h) as u16 - row;

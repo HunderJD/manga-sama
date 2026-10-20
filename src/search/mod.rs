@@ -227,7 +227,7 @@ impl Search {
         match (self.cache.get(&self.shown), self.geo.filter(|_| self.grid)) {
             (Some(links), _) if links.is_empty() => {
                 let text = format!(" {}", t("search.no_results"));
-                frame.render_widget(Paragraph::new(text).dim(), results)
+                frame.render_widget(Paragraph::new(text).dim(), results);
             }
             (Some(links), Some(geo)) => {
                 let selected = self.list.selected().unwrap_or(0).min(links.len() - 1);

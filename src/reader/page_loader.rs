@@ -86,7 +86,7 @@ impl PageLoader {
             thread::spawn(move || decoder(&task_rx, &done, &latest));
         }
         let (downloader_tasks, downloader_cache) = (tasks.clone(), cache.clone());
-        thread::spawn(move || downloader(plan_rx, downloader_tasks, done_tx, &downloader_cache));
+        thread::spawn(move || downloader(&plan_rx, &downloader_tasks, &done_tx, &downloader_cache));
         PageLoader {
             plans,
             tasks,
@@ -136,9 +136,9 @@ impl PageLoader {
 /// A newer plan takes over between two pages. Returns once a channel is closed, i.e. when the
 /// app quits.
 fn downloader(
-    plans: Receiver<(u64, Plan)>,
-    tasks: Sender<Task>,
-    done: Sender<Loaded>,
+    plans: &Receiver<(u64, Plan)>,
+    tasks: &Sender<Task>,
+    done: &Sender<Loaded>,
     cache: &Cache,
 ) -> Option<()> {
     let (mut number, mut plan) = (0, Plan::default());

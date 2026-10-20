@@ -24,7 +24,7 @@ impl CoverLoader {
     pub fn spawn() -> Self {
         let (jobs, job_rx) = mpsc::channel();
         let (done_tx, done) = mpsc::channel();
-        thread::spawn(move || loader(job_rx, done_tx));
+        thread::spawn(move || loader(&job_rx, &done_tx));
         CoverLoader { jobs, done }
     }
 
@@ -37,7 +37,7 @@ impl CoverLoader {
 
 /// Downloads and decodes covers, one request at a time. A new request replaces the queue.
 /// Returns once a channel is closed, i.e. when the app quits.
-fn loader(jobs: Receiver<(Vec<String>, u32)>, done: Sender<Cover>) -> Option<()> {
+fn loader(jobs: &Receiver<(Vec<String>, u32)>, done: &Sender<Cover>) -> Option<()> {
     // Every cover downloaded this session stays here (a few dozen KB each).
     let mut cache: HashMap<String, Vec<u8>> = HashMap::new();
     let mut queue: Vec<String> = Vec::new();

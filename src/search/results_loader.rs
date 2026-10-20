@@ -20,7 +20,7 @@ impl ResultsLoader {
     pub fn spawn() -> Self {
         let (queries, query_rx) = mpsc::channel();
         let (found_tx, found) = mpsc::channel();
-        thread::spawn(move || searcher(query_rx, found_tx));
+        thread::spawn(move || searcher(&query_rx, &found_tx));
         ResultsLoader { queries, found }
     }
 
@@ -33,7 +33,7 @@ impl ResultsLoader {
 
 /// One search at a time; queries already outdated when it is free are skipped.
 /// Returns once a channel is closed, i.e. when the app quits.
-fn searcher(queries: Receiver<Query>, found: Sender<Found>) -> Option<()> {
+fn searcher(queries: &Receiver<Query>, found: &Sender<Found>) -> Option<()> {
     loop {
         let query = queries.recv().ok()?;
         let query = queries.try_iter().last().unwrap_or(query);

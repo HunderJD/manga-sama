@@ -88,7 +88,7 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
             let chapters = match ui::loading(terminal, move || {
                 source.chapters(&found, &chosen).map_err(|e| e.to_string())
             })? {
-                Go::Next(loaded) => loaded,
+                Go::Next(chapters) => chapters,
                 Go::Back if single => continue 'search,
                 Go::Back => continue 'versions,
                 Go::Quit => return Ok(()),

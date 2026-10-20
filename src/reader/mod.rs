@@ -275,7 +275,7 @@ impl Reader<'_> {
             // ~120 fps while scrolling. Drain the whole burst (mouse wheel) before drawing again.
             let mut timeout = Duration::from_millis(if self.pending == 0 { 50 } else { 8 });
             while event::poll(timeout)? {
-                if let Some(exit) = self.handle(event::read()?)? {
+                if let Some(exit) = self.handle(event::read()?) {
                     return Ok(exit);
                 }
                 timeout = Duration::ZERO;
@@ -401,14 +401,14 @@ impl Reader<'_> {
         frame.render_widget(Paragraph::new(status).reversed(), area);
     }
 
-    fn handle(&mut self, event: Event) -> Result<Option<Exit>> {
+    fn handle(&mut self, event: Event) -> Option<Exit> {
         let code = match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => match self.popups.key(key) {
-                Shared::Quit => return Ok(Some(Exit::Quit)),
-                Shared::Used => return Ok(None),
+                Shared::Quit => return Some(Exit::Quit),
+                Shared::Used => return None,
                 Shared::Screen(key) => key.code,
             },
-            Event::Mouse(_) if self.popups.is_open() => return Ok(None),
+            Event::Mouse(_) if self.popups.is_open() => return None,
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => KeyCode::Down,
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => KeyCode::Up,
             // Left click: previous chapter, right click: next one, like h and l.
@@ -418,27 +418,27 @@ impl Reader<'_> {
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Right) => {
                 KeyCode::Right
             }
-            _ => return Ok(None),
+            _ => return None,
         };
         let step = i64::from(STEP_ROWS * self.geo.cell_h);
         let half = i64::from(self.view / 2);
         match code {
-            KeyCode::Char('q') => return Ok(Some(Exit::Quit)),
-            KeyCode::Backspace | KeyCode::Esc | KeyCode::F(1) => return Ok(Some(Exit::Chapters)),
+            KeyCode::Char('q') => return Some(Exit::Quit),
+            KeyCode::Backspace | KeyCode::Esc | KeyCode::F(1) => return Some(Exit::Chapters),
             KeyCode::Char('H') => self.bar = !self.bar,
             KeyCode::Char('j') | KeyCode::Down => self.pending += step,
             KeyCode::Char('k') | KeyCode::Up => self.pending -= step,
             KeyCode::Char('d') => self.pending += half,
             KeyCode::Char('u') => self.pending -= half,
             KeyCode::Char('l') | KeyCode::Right if self.current + 1 < self.chapters.len() => {
-                return Ok(Some(Exit::Open(self.current + 1)));
+                return Some(Exit::Open(self.current + 1));
             }
             KeyCode::Char('h') | KeyCode::Left if self.current > 0 => {
-                return Ok(Some(Exit::Open(self.current - 1)));
+                return Some(Exit::Open(self.current - 1));
             }
             _ => {}
         }
-        Ok(None)
+        None
     }
 }
 

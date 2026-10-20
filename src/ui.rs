@@ -33,7 +33,7 @@ enum Popup {
 /// What is left of a key once the shared keys are handled.
 pub enum Shared {
     Quit,
-    /// Used by the popups: nothing left for the screen.
+    /// Nothing left for the screen: a popup used it, or it wasn't a key press.
     Used,
     Screen(KeyEvent),
 }
@@ -78,6 +78,14 @@ impl Popups {
             },
         }
         Shared::Used
+    }
+
+    /// Waits for the next terminal event and handles the shared keys.
+    pub fn read_key(&mut self) -> Result<Shared> {
+        Ok(match event::read()? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => self.key(key),
+            _ => Shared::Used,
+        })
     }
 
     pub fn is_open(&self) -> bool {

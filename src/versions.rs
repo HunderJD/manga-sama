@@ -1,7 +1,7 @@
 //! The version screen: which scans of a work to read (e.g. color or black and white).
 
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use ratatui::crossterm::event::KeyCode;
 use ratatui::widgets::ListState;
 
 use crate::Result;
@@ -32,13 +32,7 @@ pub fn run(
             ui::popup(frame, &title, items, &mut list);
             popups.draw(frame, HELP);
         })?;
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        if key.kind != KeyEventKind::Press {
-            continue;
-        }
-        let key = match popups.key(key) {
+        let key = match popups.read_key()? {
             Shared::Quit => return Ok(Go::Quit),
             Shared::Used => continue,
             Shared::Screen(key) => key,

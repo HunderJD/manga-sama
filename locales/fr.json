@@ -20,6 +20,8 @@
   "anime_sama.bad_chapters": "liste des chapitres invalide : {json}",
   "origines.no_chapters": "aucun chapitre trouvé sur {url}",
   "origines.no_pages": "aucune page trouvée sur {url}",
+  "sushiscan.no_chapters": "aucun chapitre trouvé sur {url}",
+  "sushiscan.no_pages": "aucune page trouvée sur {url}",
   "page_loader.bad_image": "image illisible : {e}",
   "help.select": "choisir",
   "help.open": "ouvrir",

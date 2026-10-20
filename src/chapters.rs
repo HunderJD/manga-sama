@@ -1,7 +1,7 @@
 //! The chapter screen: pick the chapter to read, or type its number to filter the list.
 
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use ratatui::crossterm::event::KeyCode;
 use ratatui::widgets::ListState;
 
 use crate::Result;
@@ -39,13 +39,7 @@ pub fn run(
             ui::popup(frame, title.trim_end(), items, &mut list);
             popups.draw(frame, HELP);
         })?;
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        if key.kind != KeyEventKind::Press {
-            continue;
-        }
-        let key = match popups.key(key) {
+        let key = match popups.read_key()? {
             Shared::Quit => return Ok(Go::Quit),
             Shared::Used => continue,
             Shared::Screen(key) => key,

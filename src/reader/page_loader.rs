@@ -153,15 +153,15 @@ fn downloader(
             plan.download.extend(pages.into_iter().take(AHEAD));
             continue;
         }
-        let first = if finished {
-            Some(plans.recv().ok()?)
-        } else {
-            None
-        };
-        if let Some(newest) = first.into_iter().chain(plans.try_iter()).last() {
+        if finished {
+            // Nothing left to do: wait for the next plan.
+            (number, plan) = plans.recv().ok()?;
+            step = 0;
+        }
+        // A plan sent meanwhile replaces this one.
+        if let Some(newest) = plans.try_iter().last() {
             (number, plan) = newest;
             step = 0;
-            continue;
         }
         let (job, width) = (plan.job, plan.width);
         if let Some((page, url)) = plan.decode.get(step) {

@@ -51,6 +51,7 @@ bash scripts/check-i18n.sh
 
 - Work on a branch from `dev`: `feat/…`, `fix/…`, `docs/…`.
 - Conventional commits, one line: `feat(reader): …`, `fix(search): …`. No body, no `Co-Authored-By` line.
+- Pull request titles follow the same `type(scope): what` format.
 - Commit only what the owner has seen working. Don't commit things you'll take back later.
 - Pull requests go to `dev`. `dev` goes to `main` with **Create a merge commit**, never Rebase and merge. Releases are `v*` tags on `main`.
 - Never rewrite shared history: no `--amend` on a pushed commit, no force push, no `git checkout --`, `restore`, `stash` or `reset` on someone else's uncommitted work.

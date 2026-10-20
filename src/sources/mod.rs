@@ -6,8 +6,7 @@ mod hentai_origines;
 mod http;
 mod mangas_origines;
 mod origines;
-
-pub use http::image;
+mod sushiscan;
 
 use crate::Result;
 
@@ -17,7 +16,18 @@ pub static SOURCES: &[&dyn Source] = &[
     &anime_sama::AnimeSama,
     &mangas_origines::MANGAS_ORIGINES,
     &hentai_origines::HENTAI_ORIGINES,
+    &sushiscan::Sushiscan,
 ];
+
+/// Downloads an image of any source. Sushiscan's Cloudflare refuses its images (pages on
+/// `c.sushiscan.net`, covers on `sushiscan.net`) without a Referer from the site, its trailing `/`
+/// included.
+pub fn image(url: &str) -> Result<Vec<u8>> {
+    let referer = url
+        .contains("sushiscan.net/")
+        .then(|| format!("{}/", sushiscan::BASE));
+    http::image(url, referer.as_deref())
+}
 
 /// A search result or a scan version. `path` only means something to its source.
 #[derive(Clone, Default)]

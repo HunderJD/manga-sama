@@ -72,8 +72,12 @@ pub fn get_text_cached(url: &str) -> Result<String> {
 /// Some pages weigh more than the 10 MB ureq accepts by default.
 const MAX_IMAGE: u64 = 100 * 1024 * 1024;
 
-pub fn image(url: &str) -> Result<Vec<u8>> {
-    Ok(logged(url, || AGENT.get(url).call())?
+pub fn image(url: &str, referer: Option<&str>) -> Result<Vec<u8>> {
+    let mut request = AGENT.get(url);
+    if let Some(referer) = referer {
+        request = request.header("Referer", referer);
+    }
+    Ok(logged(url, || request.call())?
         .into_with_config()
         .limit(MAX_IMAGE)
         .read_to_vec()?)
